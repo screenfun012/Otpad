@@ -1,5 +1,7 @@
 # Windows instalacija — jedan klik
 
+**Brzo:** [GitHub Actions](https://github.com/screenfun012/Otpad/actions) → **Build Windows installers** → sačekaj zeleni run → **Artifacts** → **Evidencija-Otpada-Windows-installers** → preuzmi ZIP na PC i instaliraj `.msi` ili `.exe`.
+
 Na **macOS/Linux ne možeš** lokalno da napraviš pravi Windows installer (Tauri zahteva MSVC + alate koji postoje samo na Windowsu). Zato imaš dve praktične opcije ispod.
 
 ---
