@@ -1,0 +1,45 @@
+# Gradi Windows instalere (MSI + NSIS) na Microsoft serveru.
+# Sa Maca: push na GitHub → Actions → poslednji job → Artifacts → preuzmi ZIP.
+
+name: Build Windows installers
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main, master]
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+
+      - name: Install npm dependencies
+        run: npm ci
+
+      - name: Build Tauri (frontend + Rust + bundle)
+        run: npm run tauri:build
+
+      - name: Upload installers (MSI + NSIS u jednom ZIP-u)
+        uses: actions/upload-artifact@v4
+        with:
+          name: Evidencija-Otpada-Windows-installers
+          path: |
+            src-tauri/target/release/bundle/msi/
+            src-tauri/target/release/bundle/nsis/
+          if-no-files-found: error

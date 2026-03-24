@@ -32,8 +32,9 @@ dist-ssr
 *.sln
 *.sw?
 
-# Tauri
+# Tauri / Rust build
 src-tauri/target
+/target
 src-tauri/Cargo.lock
 
 # Environment variables

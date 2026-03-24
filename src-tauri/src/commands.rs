@@ -28,11 +28,22 @@ pub struct MonthData {
     pub initial_storage: f64,
 }
 
+/// Poslednja radna vrednost u koloni „Произведена“ (Excel B) za mesec — za lančano nastavljanje u sledećem mesecu.
+fn last_workday_produced(days: &[DayData]) -> Option<f64> {
+    days
+        .iter()
+        .rev()
+        .find(|d| d.produced > 0.0)
+        .map(|d| d.produced)
+}
+
+/// `carry_first_produced`: poslednji generisani broj iz prethodnog meseca (kolona B); prvi radni dan ovog meseca dobija tu vrednost.
 #[tauri::command]
 pub fn generate_waste_data(
     year: i32,
     month: u32,
     initial_storage: f64,
+    carry_first_produced: Option<f64>,
 ) -> Result<Vec<DayData>, String> {
     use chrono::{Datelike, NaiveDate, Weekday};
 
@@ -48,6 +59,7 @@ pub fn generate_waste_data(
 
     let mut days = Vec::new();
     let mut current_storage = initial_storage;
+    let mut carry = carry_first_produced;
 
     for day in 1..=days_in_month {
         if let Some(date) = NaiveDate::from_ymd_opt(year, month, day) {
@@ -66,23 +78,25 @@ pub fn generate_waste_data(
                 continue;
             }
 
-            // Generate number from 0.0001 to 0.0007 (incrementing)
-            use std::collections::hash_map::DefaultHasher;
-            use std::hash::{Hash, Hasher};
-            let mut hasher = DefaultHasher::new();
-            (year, month, day).hash(&mut hasher);
-            let hash = hasher.finish();
-            // Generate value from 0.0001 to 0.0007 (1 to 7, then divide by 10000)
-            let value = ((hash % 7) + 1) as f64 / 10000.0; // 0.0001 to 0.0007
+            // Prvi radni dan: ako ima carry iz prethodnog meseca, koristi ga; inače hash 0.0001–0.0007
+            let value = if let Some(v) = carry.take() {
+                v
+            } else {
+                use std::collections::hash_map::DefaultHasher;
+                use std::hash::{Hash, Hasher};
+                let mut hasher = DefaultHasher::new();
+                (year, month, day).hash(&mut hasher);
+                let hash = hasher.finish();
+                ((hash % 7) + 1) as f64 / 10000.0
+            };
 
-            // Update storage: add produced value
             current_storage += value;
 
             days.push(DayData {
                 date: date_str,
                 produced: value,
                 delivered: 0.0,
-                storage_state: current_storage, // Storage after adding produced
+                storage_state: current_storage,
             });
         }
     }
@@ -224,6 +238,7 @@ pub fn import_from_excel(
 pub fn generate_produced_column(
     year: i32,
     month: u32,
+    carry_first_produced: Option<f64>,
 ) -> Result<Vec<f64>, String> {
     use chrono::{Datelike, NaiveDate, Weekday};
     
@@ -238,24 +253,27 @@ pub fn generate_produced_column(
         .unwrap_or(28);
 
     let mut values = Vec::new();
+    let mut carry = carry_first_produced;
 
     for day in 1..=days_in_month {
         if let Some(date) = NaiveDate::from_ymd_opt(year, month, day) {
             let weekday = date.weekday();
             
-            // Weekends get 0.0
             if weekday == Weekday::Sat || weekday == Weekday::Sun {
                 values.push(0.0);
                 continue;
             }
 
-            // Generate number from 0.0001 to 0.0007
-            use std::collections::hash_map::DefaultHasher;
-            use std::hash::{Hash, Hasher};
-            let mut hasher = DefaultHasher::new();
-            (year, month, day).hash(&mut hasher);
-            let hash = hasher.finish();
-            let value = ((hash % 7) + 1) as f64 / 10000.0; // 0.0001 to 0.0007
+            let value = if let Some(v) = carry.take() {
+                v
+            } else {
+                use std::collections::hash_map::DefaultHasher;
+                use std::hash::{Hash, Hasher};
+                let mut hasher = DefaultHasher::new();
+                (year, month, day).hash(&mut hasher);
+                let hash = hasher.finish();
+                ((hash % 7) + 1) as f64 / 10000.0
+            };
             values.push(value);
         } else {
             values.push(0.0);
@@ -272,9 +290,11 @@ pub fn generate_year_data(
 ) -> Result<Vec<MonthData>, String> {
     let mut months = Vec::new();
     let mut current_storage = initial_storage;
+    let mut carry_first_produced: Option<f64> = None;
 
     for month in 1..=12 {
-        let days = generate_waste_data(year, month, current_storage)?;
+        let days = generate_waste_data(year, month, current_storage, carry_first_produced)?;
+        carry_first_produced = last_workday_produced(&days);
         
         // Calculate final storage for this month (last day's storage_state)
         let final_storage = if let Some(last_day) = days.last() {

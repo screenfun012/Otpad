@@ -1,57 +1,50 @@
-# Instrukcije za build Windows installer-a
+# Windows instalacija — jedan klik
 
-## Preduslovi
+Na **macOS/Linux ne možeš** lokalno da napraviš pravi Windows installer (Tauri zahteva MSVC + alate koji postoje samo na Windowsu). Zato imaš dve praktične opcije ispod.
 
-Za build Windows aplikacije na macOS/Linux, potrebno je:
+---
 
-1. **Instalirati Windows build alate** (samo ako build-uješ na macOS/Linux):
-   - Instalirati `cargo-xwin` ili koristiti cross-compilation
-   - **ILI** build-ovati direktno na Windows mašini (preporučeno)
+## Opcija A: GitHub Actions (preporučeno — ostaješ na Macu)
 
-2. **Na Windows mašini** (najlakše rešenje):
-   - Instalirati [Rust](https://www.rust-lang.org/tools/install)
-   - Instalirati [Node.js](https://nodejs.org/)
-   - Instalirati [Visual Studio Build Tools](https://visualstudio.microsoft.com/downloads/#build-tools-for-visual-studio-2022) (potrebno za Rust Windows build)
+1. Okači projekat na GitHub (privatan ili javni repo).
+2. U repou: **Actions** → **Build Windows installers** → **Run workflow** (ili samo uradi push na `main` / `master` — workflow se pokreće automatski).
+3. Kad job završi, otvori taj run → na dnu **Artifacts** → preuzmi **Evidencija-Otpada-Windows-installers** (jedan ZIP sa `msi/` i `nsis/` folderima).
+4. Na Windowsu raspakuj ZIP, uđi u `msi` ili `nsis`, pokreni `.msi` ili setup `.exe` i prati čarobnjaka — to je to.
 
-## Build proces
+Instalirana aplikacija: ime kao u `tauri.conf.json` (**Evidencija Otpada**), verzija iz `src-tauri/tauri.conf.json` / `Cargo.toml`.
 
-### Opcija 1: Build na Windows mašini (preporučeno)
+---
 
-```bash
-# 1. Kloniraj/nauči projekat
-cd waste-evidence-app
+## Opcija B: Build direktno na Windows mašini
 
-# 2. Instaliraj Node.js dependencies
+1. Kopiraj ceo folder projekta (npr. USB ili mreža).
+2. Instaliraj [Node.js LTS](https://nodejs.org/) i [Rust](https://rustup.rs/) (podrazumevani toolchain na Windowsu je dovoljan).
+3. U rootu projekta u PowerShell ili CMD:
+
+```bat
 npm install
-
-# 3. Build aplikacije
-npm run tauri:build:windows
+npm run tauri:build
 ```
 
-Installer fajlovi će biti u:
-- `src-tauri/target/x86_64-pc-windows-msvc/release/bundle/msi/` - MSI installer
-- `src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis/` - NSIS installer (EXE)
+4. Instaleri su ovde:
+   - `src-tauri\target\release\bundle\msi\` — `.msi`
+   - `src-tauri\target\release\bundle\nsis\` — `.exe`
 
-### Opcija 2: Build na macOS/Linux (cross-compilation)
+Te fajlove možeš da kopiraš na drugi PC i pokreneš — nije potrebno ponovo buildovati.
 
-Zahtevaju dodatne alate i konfiguraciju. Preporučeno je build-ovati na Windows mašini.
+---
 
-## Rezultat
+## Šta tačno dobijaš
 
-Nakon build-a, dobijaš:
-- **MSI installer** - standardni Windows installer
-- **NSIS installer (EXE)** - portable installer
+| Fajl | Opis |
+|------|------|
+| **MSI** | Standardni Windows installer |
+| **NSIS (.exe)** | Alternativni setup |
 
-Oba installer-a mogu se distribuirati korisnicima. Korisnik samo pokreće installer i instalira aplikaciju.
+Oba rade „klik instal“; izaberi jedan koji ti više odgovara.
 
-## Distribucija
+---
 
-Installer fajlovi su spremni za distribuciju. Korisnik:
-1. Pokreće installer (EXE ili MSI)
-2. Prati instalacione korake
-3. Aplikacija se instalira i može se pokrenuti iz Start menija
+## Napomena o potpisivanju
 
-## Napomena
-
-Ako build-uješ na macOS/Linux, možda ćeš morati da koristiš Docker ili Windows VM za build proces, jer Tauri zahteva Windows build alate za kreiranje Windows installer-a.
-
+Buildovi iz ovog projekta su **nepotpisani**. Windows SmartScreen može da upozori pri prvom pokretanju — „More info“ → „Run anyway“ (ili potpiši aplikaciju kasnije sertifikatom ako treba za firmu).
