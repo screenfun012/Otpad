@@ -2,6 +2,12 @@ use crate::commands::MonthData;
 use rust_xlsxwriter::*;
 use std::path::PathBuf;
 
+/// Isto kao u Rust `round3` / TS `roundTons` — izbegava 1.640 → 1.641 u Excelu od formule u koloni D.
+#[inline]
+fn round3(x: f64) -> f64 {
+    (x * 1000.0).round() / 1000.0
+}
+
 pub fn export_to_excel(data: &MonthData, output_path: PathBuf) -> Result<(), String> {
     let mut workbook = Workbook::new();
     let worksheet = workbook.add_worksheet();
@@ -229,21 +235,11 @@ fn write_month_to_sheet<'a>(worksheet: &'a mut Worksheet, data: &MonthData, star
     
     for day in &data.days {
         write_cell!(start_row, 0, &day.date, &data_format);
-        // Format produced value to 4 decimal places (0.0001, 0.0002, etc.)
-        let produced_formatted = (day.produced * 10000.0).round() / 10000.0;
-        write_cell!(start_row, 1, produced_formatted, &data_format);
-        write_cell!(start_row, 2, day.delivered, &data_format);
-        
-        // Use formula for storage state
-        if start_row == data_start_row {
-            // First row: initial_storage + produced
-            let formula = format!("={}+B{}", data.initial_storage, start_row + 1);
-            write_cell!(start_row, 3, Formula::new(&formula), &data_format);
-        } else {
-            // Subsequent rows: previous storage + produced
-            let formula = format!("=D{}+B{}", start_row, start_row + 1);
-            write_cell!(start_row, 3, Formula::new(&formula), &data_format);
-        }
+        // 3 decimale (t); kolona D kao vrednost iz podataka — ne Excel formula (formula daje float drift do 1.641)
+        let produced_f = round3(day.produced.max(0.0));
+        write_cell!(start_row, 1, produced_f, &data_format);
+        write_cell!(start_row, 2, round3(day.delivered.max(0.0)), &data_format);
+        write_cell!(start_row, 3, round3(day.storage_state.max(0.0)), &data_format);
         
         // Write empty cells for remaining columns (4-11) with borders
         for col in 4..=11 {
