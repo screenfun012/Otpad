@@ -137,6 +137,68 @@ fn split_into_twelve_months(total: f64) -> [f64; 12] {
     out
 }
 
+/// Ista logika težina kao `distribute_month_production(year, 1, …)`, ali u **celim mikro-jedinicama**
+/// (bez f64→i64 greške koja može učiniti poslednji segment negativnim).
+fn distribute_year_delta_micros(year: i32, n: usize, delta_micro: i64) -> Result<Vec<i64>, String> {
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
+
+    const MIN_MICRO: i64 = 1;
+
+    if n == 0 {
+        return Err("Nema radnih dana u godini za raspodelu".into());
+    }
+    if delta_micro <= 0 {
+        return Ok(vec![0i64; n]);
+    }
+
+    let min_floor = MIN_MICRO * n as i64;
+    if delta_micro < min_floor {
+        let mut micros = vec![0i64; n];
+        let base = delta_micro / n as i64;
+        let rem = (delta_micro % n as i64) as usize;
+        for i in 0..n {
+            micros[i] = base + if i < rem { 1 } else { 0 };
+        }
+        return Ok(micros);
+    }
+
+    let remaining = delta_micro - min_floor;
+    let mut weights = vec![0.0f64; n];
+    for i in 0..n {
+        let mut hasher = DefaultHasher::new();
+        (year, 1u32, i as u32).hash(&mut hasher);
+        let h = hasher.finish();
+        weights[i] = 1.0 + (h % 10_000) as f64 / 10_000.0;
+    }
+    let wsum: f64 = weights.iter().sum();
+
+    let mut extras = vec![0i64; n];
+    let mut fractions: Vec<(usize, f64)> = Vec::with_capacity(n);
+    let mut sum_floor = 0i64;
+    for i in 0..n {
+        let exact = remaining as f64 * weights[i] / wsum;
+        let fl = exact.floor() as i64;
+        extras[i] = fl;
+        sum_floor += fl;
+        fractions.push((i, exact - fl as f64));
+    }
+
+    let mut leftover = remaining - sum_floor;
+    fractions.sort_by(|a, b| b.1.total_cmp(&a.1));
+    let mut j = 0usize;
+    while leftover > 0 {
+        let idx = fractions[j % n].0;
+        extras[idx] += 1;
+        leftover -= 1;
+        j += 1;
+    }
+
+    let micros: Vec<i64> = extras.iter().map(|&e| MIN_MICRO + e).collect();
+    debug_assert_eq!(micros.iter().sum::<i64>(), delta_micro);
+    Ok(micros)
+}
+
 /// `carry_first_produced`: poslednji broj iz prethodnog meseca (samo „слободан“ режим).
 /// `monthly_produced_target`: сума „Произведена“ за овај месец (режим расподеле).
 #[tauri::command]
@@ -429,19 +491,20 @@ fn is_weekend_day(year: i32, date_str: &str) -> bool {
         .filter(|s| !s.is_empty())
         .collect();
     if parts.len() < 2 {
-        return false;
+        return true;
     }
     let day: u32 = parts[0].parse().unwrap_or(0);
     let month: u32 = parts[1].parse().unwrap_or(0);
     if day == 0 || month == 0 {
-        return false;
+        return true;
     }
     match NaiveDate::from_ymd_opt(year, month, day) {
         Some(date) => {
             let wd = date.weekday();
             wd == Weekday::Sat || wd == Weekday::Sun
         }
-        None => false,
+        // Nevažeći datum (npr. stari JSON): ne tretirati kao radni dan — inače se poremeti broj radnih dana i raspodela.
+        None => true,
     }
 }
 
@@ -477,22 +540,7 @@ fn apply_year_storage_bounds(
     }
 
     let micros: Vec<i64> = if delta_micro > 0 {
-        if n == 0 {
-            return Err("Nema radnih dana u godini za raspodelu".into());
-        }
-        let vals = distribute_month_production(year, 1, n, delta_micro as f64 / 1000.0, None)?;
-        let mut micros: Vec<i64> = vals
-            .iter()
-            .map(|v| (v * 1000.0).round() as i64)
-            .collect();
-        let sum: i64 = micros.iter().sum();
-        if let Some(last) = micros.last_mut() {
-            *last += delta_micro - sum;
-        }
-        if micros.iter().any(|&x| x < 0) {
-            return Err("Raspodela daje negativnu vrednost na odsečku".into());
-        }
-        micros
+        distribute_year_delta_micros(year, n, delta_micro)?
     } else {
         vec![0i64; n]
     };
