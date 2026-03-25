@@ -11,6 +11,15 @@ pub struct WasteConfig {
     pub waste_name: String,
     pub waste_description: String,
     pub record_keeper: String,
+    /// Укупан износ из претходне године (т): расподела производње по месецима.
+    #[serde(default)]
+    pub yearly_carry_total: Option<f64>,
+    /// Почетно стање (1. јануар, пре првог уноса) — ручно.
+    #[serde(default)]
+    pub year_start_storage: Option<f64>,
+    /// Стање на последњи дан децембра (крај године) — ручно; користи се за усаглашавање колоне „Стање“.
+    #[serde(default)]
+    pub december_closing_storage: Option<f64>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -37,19 +46,112 @@ fn last_workday_produced(days: &[DayData]) -> Option<f64> {
         .map(|d| d.produced)
 }
 
-/// `carry_first_produced`: poslednji generisani broj iz prethodnog meseca (kolona B); prvi radni dan ovog meseca dobija tu vrednost.
+fn round3(x: f64) -> f64 {
+    (x * 1000.0).round() / 1000.0
+}
+
+#[inline]
+fn nonneg3(x: f64) -> f64 {
+    round3(x).max(0.0)
+}
+
+/// Минимално по **радном** дану (т) кад год има довољно месечног износа — да скоро сваки радни дан има нешто; викенди = 0.
+const MIN_WEEKDAY_PRODUCED_T: f64 = 0.001;
+
+/// Deli `month_total` na radne dane; opciono prvi dan = carry iz prethodnog meseca.
+fn distribute_month_production(
+    year: i32,
+    month: u32,
+    weekday_count: usize,
+    month_total: f64,
+    carry_first: Option<f64>,
+) -> Result<Vec<f64>, String> {
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
+
+    if weekday_count == 0 {
+        return Ok(vec![]);
+    }
+    if month_total < 0.0 {
+        return Err("Monthly total must be non-negative".into());
+    }
+
+    if let Some(first) = carry_first {
+        if first > month_total + 1e-9 {
+            return Err("Prenos prelazi mesečni iznos".into());
+        }
+        if weekday_count == 1 {
+            return Ok(vec![round3(month_total)]);
+        }
+        let rest_total = month_total - first;
+        let mut rest_vec =
+            distribute_month_production(year, month, weekday_count - 1, rest_total, None)?;
+        let mut out = vec![round3(first)];
+        out.append(&mut rest_vec);
+        return Ok(out);
+    }
+
+    let n = weekday_count as f64;
+    let min_floor = MIN_WEEKDAY_PRODUCED_T * n;
+
+    // Премало за минимум на сваки радни дан: равномерно са исправком заокруживања
+    if month_total + 1e-12 < min_floor {
+        let mut raw = vec![0.0f64; weekday_count];
+        for i in 0..weekday_count.saturating_sub(1) {
+            raw[i] = round3(month_total / n);
+        }
+        let sum_so_far: f64 = raw[..weekday_count.saturating_sub(1)].iter().sum();
+        raw[weekday_count - 1] = round3(month_total - sum_so_far);
+        return Ok(raw);
+    }
+
+    // Сваки радни дан бар MIN, остатак насумично по тежинама (варијација)
+    let remaining = month_total - min_floor;
+    let mut weights = vec![0.0f64; weekday_count];
+    for i in 0..weekday_count {
+        let mut hasher = DefaultHasher::new();
+        (year, month, i as u32).hash(&mut hasher);
+        let h = hasher.finish();
+        weights[i] = 1.0 + (h % 10_000) as f64 / 10_000.0;
+    }
+    let wsum: f64 = weights.iter().sum();
+    let mut raw: Vec<f64> = weights
+        .iter()
+        .map(|w| round3(MIN_WEEKDAY_PRODUCED_T + remaining * w / wsum))
+        .collect();
+    let sum_so_far: f64 = raw[..weekday_count.saturating_sub(1)].iter().sum();
+    raw[weekday_count - 1] = nonneg3(month_total - sum_so_far);
+
+    Ok(raw)
+}
+
+fn split_into_twelve_months(total: f64) -> [f64; 12] {
+    let micro = (total * 1000.0).round() as i64;
+    let base = micro / 12;
+    let rem = (micro % 12) as usize;
+    let mut out = [0.0f64; 12];
+    for i in 0..12 {
+        let micro_i = base + if i < rem { 1 } else { 0 };
+        out[i] = micro_i as f64 / 1000.0;
+    }
+    out
+}
+
+/// `carry_first_produced`: poslednji broj iz prethodnog meseca (samo „слободан“ режим).
+/// `monthly_produced_target`: сума „Произведена“ за овај месец (режим расподеле).
 #[tauri::command]
 pub fn generate_waste_data(
     year: i32,
     month: u32,
     initial_storage: f64,
     carry_first_produced: Option<f64>,
+    monthly_produced_target: Option<f64>,
 ) -> Result<Vec<DayData>, String> {
     use chrono::{Datelike, NaiveDate, Weekday};
 
     let start_date = NaiveDate::from_ymd_opt(year, month, 1)
         .ok_or("Invalid date")?;
-    
+
     let days_in_month = start_date
         .with_day(1)
         .and_then(|d| d.with_month(month + 1))
@@ -57,44 +159,78 @@ pub fn generate_waste_data(
         .map(|d| d.day())
         .unwrap_or(28);
 
-    let mut days = Vec::new();
-    let mut current_storage = initial_storage;
-    let mut carry = carry_first_produced;
+    struct DaySlot {
+        date_str: String,
+        is_weekend: bool,
+        day: u32,
+    }
 
+    let mut slots = Vec::new();
     for day in 1..=days_in_month {
         if let Some(date) = NaiveDate::from_ymd_opt(year, month, day) {
             let weekday = date.weekday();
-            
             let date_str = format!("{:02}.{:02}.", day, month);
-            
-            // Skip weekends (Saturday = 6, Sunday = 7)
-            if weekday == Weekday::Sat || weekday == Weekday::Sun {
-                days.push(DayData {
-                    date: date_str,
-                    produced: 0.0,
-                    delivered: 0.0,
-                    storage_state: current_storage, // Weekend keeps same storage
-                });
-                continue;
-            }
+            let is_weekend = weekday == Weekday::Sat || weekday == Weekday::Sun;
+            slots.push(DaySlot {
+                date_str,
+                is_weekend,
+                day,
+            });
+        }
+    }
 
-            // Prvi radni dan: ako ima carry iz prethodnog meseca, koristi ga; inače hash 0.0001–0.0007
+    let weekday_indices: Vec<usize> = slots
+        .iter()
+        .enumerate()
+        .filter(|(_, s)| !s.is_weekend)
+        .map(|(i, _)| i)
+        .collect();
+    let n = weekday_indices.len();
+
+    let mut produced_by_slot: Vec<Option<f64>> = vec![None; slots.len()];
+
+    if let Some(m) = monthly_produced_target {
+        if n == 0 {
+            return Err("Nema radnih dana u mesecu".into());
+        }
+        let vals = distribute_month_production(year, month, n, m, None)?;
+        for (idx, &slot_i) in weekday_indices.iter().enumerate() {
+            produced_by_slot[slot_i] = Some(vals[idx]);
+        }
+    } else {
+        let mut carry = carry_first_produced;
+        for &slot_i in &weekday_indices {
             let value = if let Some(v) = carry.take() {
                 v
             } else {
                 use std::collections::hash_map::DefaultHasher;
                 use std::hash::{Hash, Hasher};
                 let mut hasher = DefaultHasher::new();
-                (year, month, day).hash(&mut hasher);
+                (year, month, slots[slot_i].day).hash(&mut hasher);
                 let hash = hasher.finish();
-                ((hash % 7) + 1) as f64 / 10000.0
+                ((hash % 7) + 1) as f64 / 1000.0
             };
+            produced_by_slot[slot_i] = Some(value);
+        }
+    }
 
-            current_storage += value;
+    let mut days = Vec::new();
+    let mut current_storage = nonneg3(initial_storage);
 
+    for (i, slot) in slots.iter().enumerate() {
+        if slot.is_weekend {
             days.push(DayData {
-                date: date_str,
-                produced: value,
+                date: slot.date_str.clone(),
+                produced: 0.0,
+                delivered: 0.0,
+                storage_state: current_storage,
+            });
+        } else {
+            let p = nonneg3(produced_by_slot[i].unwrap_or(0.0));
+            current_storage = nonneg3(current_storage + p);
+            days.push(DayData {
+                date: slot.date_str.clone(),
+                produced: p,
                 delivered: 0.0,
                 storage_state: current_storage,
             });
@@ -110,10 +246,10 @@ pub fn calculate_storage_state(
     produced_values: Vec<f64>,
 ) -> Result<Vec<f64>, String> {
     let mut storage_states = Vec::new();
-    let mut current = initial_storage;
+    let mut current = nonneg3(initial_storage);
 
     for produced in produced_values {
-        current += produced;
+        current = nonneg3(current + nonneg3(produced));
         storage_states.push(current);
     }
 
@@ -272,7 +408,7 @@ pub fn generate_produced_column(
                 let mut hasher = DefaultHasher::new();
                 (year, month, day).hash(&mut hasher);
                 let hash = hasher.finish();
-                ((hash % 7) + 1) as f64 / 10000.0
+                ((hash % 7) + 1) as f64 / 1000.0
             };
             values.push(value);
         } else {
@@ -283,47 +419,215 @@ pub fn generate_produced_column(
     Ok(values)
 }
 
+/// Да ли је датум (формат „ДД.ММ.“) викенд у датој години.
+fn is_weekend_day(year: i32, date_str: &str) -> bool {
+    use chrono::{Datelike, NaiveDate, Weekday};
+    let parts: Vec<&str> = date_str
+        .trim()
+        .trim_end_matches('.')
+        .split('.')
+        .filter(|s| !s.is_empty())
+        .collect();
+    if parts.len() < 2 {
+        return false;
+    }
+    let day: u32 = parts[0].parse().unwrap_or(0);
+    let month: u32 = parts[1].parse().unwrap_or(0);
+    if day == 0 || month == 0 {
+        return false;
+    }
+    match NaiveDate::from_ymd_opt(year, month, day) {
+        Some(date) => {
+            let wd = date.weekday();
+            wd == Weekday::Sat || wd == Weekday::Sun
+        }
+        None => false,
+    }
+}
+
+/// Расподела укупне производње (крај − почетак) на **све радне дане** у години; викенди = 0.
+/// Стање се води у целим микро-јединицама (1000 = 1 t) да крај године буде тачно као унет
+/// (нпр. 1.640), без накупљања грешке од `round3` на сваком дану.
+fn apply_year_storage_bounds(
+    months: &mut Vec<MonthData>,
+    year_start: f64,
+    year_end: f64,
+) -> Result<(), String> {
+    let year_start = nonneg3(year_start);
+    let year_end = nonneg3(year_end);
+    if year_end + 1e-9 < year_start {
+        return Err("Kraj decembra mora biti ≥ početka godine".into());
+    }
+    if months.is_empty() {
+        return Ok(());
+    }
+    let year = months[0].config.year;
+
+    let year_start_micro = (year_start * 1000.0).round() as i64;
+    let year_end_micro = (year_end * 1000.0).round() as i64;
+    let delta_micro = year_end_micro.saturating_sub(year_start_micro);
+
+    let mut n = 0usize;
+    for m in months.iter() {
+        for d in &m.days {
+            if !is_weekend_day(year, &d.date) {
+                n += 1;
+            }
+        }
+    }
+
+    let micros: Vec<i64> = if delta_micro > 0 {
+        if n == 0 {
+            return Err("Nema radnih dana u godini za raspodelu".into());
+        }
+        let vals = distribute_month_production(year, 1, n, delta_micro as f64 / 1000.0, None)?;
+        let mut micros: Vec<i64> = vals
+            .iter()
+            .map(|v| (v * 1000.0).round() as i64)
+            .collect();
+        let sum: i64 = micros.iter().sum();
+        if let Some(last) = micros.last_mut() {
+            *last += delta_micro - sum;
+        }
+        if micros.iter().any(|&x| x < 0) {
+            return Err("Raspodela daje negativnu vrednost na odsečku".into());
+        }
+        micros
+    } else {
+        vec![0i64; n]
+    };
+
+    let mut wi = 0usize;
+    let mut cur_m = year_start_micro;
+
+    for m in months.iter_mut() {
+        m.initial_storage = cur_m as f64 / 1000.0;
+        for d in &mut m.days {
+            if is_weekend_day(year, &d.date) {
+                d.produced = 0.0;
+            } else {
+                let pm = micros[wi];
+                wi += 1;
+                d.produced = pm as f64 / 1000.0;
+                cur_m += pm;
+            }
+            d.storage_state = cur_m as f64 / 1000.0;
+        }
+    }
+
+    debug_assert_eq!(wi, n);
+    debug_assert_eq!(cur_m, year_end_micro);
+
+    Ok(())
+}
+
 #[tauri::command]
 pub fn generate_year_data(
-    year: i32,
-    initial_storage: f64,
+    mut base_config: WasteConfig,
+    year_start_storage: f64,
+    yearly_carry_total: Option<f64>,
+    december_closing_storage: Option<f64>,
 ) -> Result<Vec<MonthData>, String> {
+    let year = base_config.year;
+    let use_split = yearly_carry_total.map(|t| t > 1e-9).unwrap_or(false);
+
     let mut months = Vec::new();
-    let mut current_storage = initial_storage;
+    let mut current_storage: f64;
     let mut carry_first_produced: Option<f64> = None;
 
-    for month in 1..=12 {
-        let days = generate_waste_data(year, month, current_storage, carry_first_produced)?;
-        carry_first_produced = last_workday_produced(&days);
-        
-        // Calculate final storage for this month (last day's storage_state)
-        let final_storage = if let Some(last_day) = days.last() {
-            last_day.storage_state
-        } else {
-            current_storage
-        };
-        
-        let config = WasteConfig {
-            id: format!("{}_{:02}", year, month),
-            year,
-            month,
-            index_number: "170402".to_string(),
-            waste_name: "Отпадни алуминијум".to_string(),
-            waste_description: "неопасан отпад".to_string(),
-            record_keeper: "Наташа Јевтић".to_string(),
-        };
+    if use_split {
+        let t = yearly_carry_total.unwrap();
+        current_storage = nonneg3(year_start_storage);
+        let quotas = split_into_twelve_months(t);
 
-        months.push(MonthData {
-            config,
-            days,
-            initial_storage: current_storage,
-        });
+        for month in 1..=12 {
+            let days = generate_waste_data(
+                year,
+                month,
+                current_storage,
+                None,
+                Some(quotas[month as usize - 1]),
+            )?;
+            let final_storage = days
+                .last()
+                .map(|d| d.storage_state)
+                .unwrap_or(current_storage);
 
-        // Next month starts with this month's final storage
-        current_storage = final_storage;
+            base_config.month = month;
+            base_config.year = year;
+            base_config.id = format!("{}_{:02}", year, month);
+            base_config.yearly_carry_total = Some(t);
+            base_config.year_start_storage = Some(year_start_storage);
+            base_config.december_closing_storage = december_closing_storage;
+
+            months.push(MonthData {
+                config: base_config.clone(),
+                days,
+                initial_storage: current_storage,
+            });
+
+            current_storage = final_storage;
+        }
+    } else {
+        current_storage = nonneg3(year_start_storage);
+        for month in 1..=12 {
+            let days = generate_waste_data(year, month, current_storage, carry_first_produced, None)?;
+            carry_first_produced = last_workday_produced(&days);
+            let final_storage = days
+                .last()
+                .map(|d| d.storage_state)
+                .unwrap_or(current_storage);
+
+            base_config.month = month;
+            base_config.year = year;
+            base_config.id = format!("{}_{:02}", year, month);
+            base_config.yearly_carry_total = None;
+            base_config.year_start_storage = Some(year_start_storage);
+            base_config.december_closing_storage = december_closing_storage;
+
+            months.push(MonthData {
+                config: base_config.clone(),
+                days,
+                initial_storage: current_storage,
+            });
+
+            current_storage = final_storage;
+        }
+    }
+
+    if let Some(dec) = december_closing_storage {
+        apply_year_storage_bounds(&mut months, year_start_storage, dec)?;
+        for m in &mut months {
+            m.config.year_start_storage = Some(year_start_storage);
+            m.config.december_closing_storage = Some(dec);
+        }
     }
 
     Ok(months)
+}
+
+/// Насумично поново генерише само један месец (расподела или слободан режим према config.yearly_carry_total).
+#[tauri::command]
+pub fn regenerate_month_random(
+    config: WasteConfig,
+    initial_storage: f64,
+    carry_first_produced: Option<f64>,
+) -> Result<MonthData, String> {
+    let year = config.year;
+    let month = config.month;
+    let days = if let Some(t) = config.yearly_carry_total.filter(|x| *x > 1e-9) {
+        let quotas = split_into_twelve_months(t);
+        let q = quotas[month as usize - 1];
+        generate_waste_data(year, month, initial_storage, None, Some(q))?
+    } else {
+        generate_waste_data(year, month, initial_storage, carry_first_produced, None)?
+    };
+
+    Ok(MonthData {
+        config,
+        days,
+        initial_storage,
+    })
 }
 
 fn get_config_dir() -> Result<PathBuf, String> {

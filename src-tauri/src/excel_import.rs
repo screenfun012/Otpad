@@ -16,7 +16,7 @@ pub fn import_from_excel(file_path: PathBuf) -> Result<Vec<MonthData>, String> {
     let max_row = range.height();
 
     while current_row < max_row {
-        // Look for year field (row with "Година" in column B)
+        // Look for year field (column B: Godina / ćirilica)
         if let Some(year_row) = find_year_row(&range, current_row) {
             if let Some(month_data) = parse_month_data(&range, year_row)? {
                 let days_len = month_data.days.len();
@@ -37,7 +37,8 @@ fn find_year_row(range: &calamine::Range<calamine::Data>, start_row: usize) -> O
     for row in start_row..range.height() {
         if let Some(cell) = range.get((row, 1)) {
             if let calamine::Data::String(s) = cell {
-                if s.trim() == "Година" {
+                let t = s.trim();
+                if t == "Godina" || t == "Година" {
                     return Some(row);
                 }
             }
@@ -60,13 +61,13 @@ fn parse_month_data(range: &calamine::Range<calamine::Data>, start_row: usize) -
         .unwrap_or_else(|| "170402".to_string());
 
     let waste_name = get_cell_value(range, start_row + 6, 5)
-        .unwrap_or_else(|| "Отпадни алуминијум".to_string());
+        .unwrap_or_else(|| "Otpadni aluminium".to_string());
 
     let waste_description = get_cell_value(range, start_row + 8, 5)
-        .unwrap_or_else(|| "неопасан отпад".to_string());
+        .unwrap_or_else(|| "neopasan otpad".to_string());
 
     let record_keeper = get_cell_value(range, start_row + 10, 5)
-        .unwrap_or_else(|| "Наташа Јевтић".to_string());
+        .unwrap_or_else(|| "Nataša Jevtić".to_string());
 
     let config = WasteConfig {
         id: format!("{}_{:02}", year, month),
@@ -76,9 +77,12 @@ fn parse_month_data(range: &calamine::Range<calamine::Data>, start_row: usize) -
         waste_name,
         waste_description,
         record_keeper,
+        yearly_carry_total: None,
+        year_start_storage: None,
+        december_closing_storage: None,
     };
 
-    // Find data start row (row with "Датум" header)
+    // Find data start row (Datum / ćirilica)
     let data_start_row = find_data_start_row(range, start_row + 15)?;
     
     // Parse days
@@ -89,7 +93,8 @@ fn parse_month_data(range: &calamine::Range<calamine::Data>, start_row: usize) -
     while row < range.height() {
         let date_cell = range.get((row, 0));
         if let Some(calamine::Data::String(date_str)) = date_cell {
-            if date_str.trim() == "Укупно" || date_str.trim().is_empty() {
+            let d = date_str.trim();
+            if d == "Ukupno" || d == "Укупно" || d.is_empty() {
                 break;
             }
 
@@ -137,7 +142,8 @@ fn find_data_start_row(range: &calamine::Range<calamine::Data>, start_row: usize
     for row in start_row..range.height() {
         if let Some(cell) = range.get((row, 0)) {
             if let calamine::Data::String(s) = cell {
-                if s.trim() == "Датум" {
+                let t = s.trim();
+                if t == "Datum" || t == "Датум" {
                     return Ok(row);
                 }
             }
@@ -158,6 +164,9 @@ fn get_cell_value(range: &calamine::Range<calamine::Data>, row: usize, col: usiz
 
 fn month_name_to_number(name: &str) -> Result<u32, String> {
     let months = [
+        ("Januar", 1), ("Februar", 2), ("Mart", 3), ("April", 4),
+        ("Maj", 5), ("Jun", 6), ("Jul", 7), ("Avgust", 8),
+        ("Septembar", 9), ("Oktobar", 10), ("Novembar", 11), ("Decembar", 12),
         ("Јануар", 1), ("Фебруар", 2), ("Март", 3), ("Април", 4),
         ("Мај", 5), ("Јун", 6), ("Јул", 7), ("Август", 8),
         ("Септембар", 9), ("Октобар", 10), ("Новембар", 11), ("Децембар", 12),

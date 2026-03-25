@@ -1,6 +1,6 @@
 {
   "productName": "Evidencija Otpada",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "identifier": "com.wasteevidence.desktop",
   "build": {
     "beforeDevCommand": "npm run dev",

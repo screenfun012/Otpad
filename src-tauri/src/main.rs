@@ -21,6 +21,7 @@ fn main() {
             commands::save_month_data,
             commands::generate_produced_column,
             commands::generate_year_data,
+            commands::regenerate_month_random,
             commands::get_home_dir,
         ])
         .run(tauri::generate_context!())

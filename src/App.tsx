@@ -1,11 +1,24 @@
 import { useState, useEffect } from "react";
 import HeaderForm from "./components/HeaderForm";
+import MonthTabs from "./components/MonthTabs";
 import WasteTable from "./components/WasteTable";
 import ConfigManager from "./components/ConfigManager";
-import { invoke } from "@tauri-apps/api/core";
-import { save } from "@tauri-apps/plugin-dialog";
+import { invoke, save } from "./utils/tauriInvoke";
 import { Moon, Sun, Download, FileText, Loader2, AlertTriangle } from "lucide-react";
 import type { WasteConfig, DayData, MonthData } from "./types";
+import { nonNegativeTons } from "./utils/parseTonsInput";
+
+/** Proizvedeno/predato ≥ 0; stanje u lancu ≥ 0 (t). Lanac u celim mikro-jedinicama (kao u Rust) da nema 1.640 → 1.641 od zaokruživanja. */
+function recomputeStorageForDays(days: DayData[], initialStorage: number): DayData[] {
+  let curMicro = Math.round(nonNegativeTons(initialStorage) * 1000);
+  return days.map((d) => {
+    const p = nonNegativeTons(Number(d.produced) || 0);
+    const del = nonNegativeTons(Number(d.delivered) || 0);
+    curMicro += Math.round(p * 1000);
+    const cur = nonNegativeTons(curMicro / 1000);
+    return { ...d, produced: p, delivered: del, storage_state: cur };
+  });
+}
 
 function App() {
   const [config, setConfig] = useState<WasteConfig>({
@@ -13,13 +26,19 @@ function App() {
     year: new Date().getFullYear(),
     month: new Date().getMonth() + 1,
     index_number: "170402",
-    waste_name: "Отпадни алуминијум",
-    waste_description: "неопасан отпад",
-    record_keeper: "Наташа Јевтић",
+    waste_name: "Otpadni aluminium",
+    waste_description: "neopasan otpad",
+    record_keeper: "Nataša Jevtić",
+    yearly_carry_total: null,
+    year_start_storage: null,
+    december_closing_storage: null,
   });
 
   const [days, setDays] = useState<DayData[]>([]);
   const [initialStorage, setInitialStorage] = useState(0.0);
+  const [yearStartStorage, setYearStartStorage] = useState(0);
+  const [decemberClosingStorage, setDecemberClosingStorage] = useState(0);
+  const [yearlyProductionTotal, setYearlyProductionTotal] = useState(0);
   const [totalProduced, setTotalProduced] = useState(0.0);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -37,10 +56,15 @@ function App() {
 
       if (data) {
         setConfig(data.config);
-        setDays(data.days);
-        setInitialStorage(data.initial_storage);
+        const init = nonNegativeTons(data.initial_storage);
+        setInitialStorage(init);
+        setDays(recomputeStorageForDays(data.days, init));
+        setYearStartStorage(nonNegativeTons(data.config.year_start_storage ?? init));
+        setDecemberClosingStorage(nonNegativeTons(data.config.december_closing_storage ?? 0));
+        setYearlyProductionTotal(nonNegativeTons(data.config.yearly_carry_total ?? 0));
         calculateTotal();
       } else {
+        setDays([]);
         // Try to load previous month's final storage state
         let prevMonth = config.month - 1;
         let prevYear = config.year;
@@ -56,18 +80,14 @@ function App() {
           });
           
           if (prevData && prevData.days.length > 0) {
-            // Use last day's storage state as initial storage for new month
             const lastDay = prevData.days[prevData.days.length - 1];
-            setInitialStorage(lastDay.storage_state);
+            setInitialStorage(nonNegativeTons(lastDay.storage_state));
           } else {
             setInitialStorage(0.0);
           }
         } catch (e) {
-          // No previous month data, start from 0
           setInitialStorage(0.0);
         }
-        
-        // Don't auto-generate, let user click generate button
       }
     } catch (error) {
       console.error("Failed to load month data:", error);
@@ -77,50 +97,179 @@ function App() {
     }
   };
 
-  const generateData = async () => {
-    // Generate for entire year
-    await generateYearData();
+  const distributedBudgetT = (): number => {
+    if (yearlyProductionTotal > 0) return yearlyProductionTotal;
+    if (decemberClosingStorage > yearStartStorage) {
+      return decemberClosingStorage - yearStartStorage;
+    }
+    return 0;
   };
 
-
-  const generateYearData = async () => {
+  const generateYearDistributed = async () => {
+    const t = distributedBudgetT();
+    if (t <= 0) {
+      alert(
+        "Za raspodelu unesite ukupnu proizvodnju ili oba polja (početak godine i kraj decembra) tako da je kraj > početka.",
+      );
+      return;
+    }
     try {
-      const months = await invoke<MonthData[]>("generate_year_data", {
+      const baseConfig: WasteConfig = {
+        ...config,
         year: config.year,
-        initialStorage: initialStorage,
+        yearly_carry_total: t,
+        year_start_storage: yearStartStorage,
+        december_closing_storage: decemberClosingStorage > 0 ? decemberClosingStorage : null,
+      };
+      const months = await invoke<MonthData[]>("generate_year_data", {
+        baseConfig,
+        yearStartStorage,
+        yearlyCarryTotal: t,
+        decemberClosingStorage: decemberClosingStorage > 0 ? decemberClosingStorage : null,
       });
 
-      console.log("Generated months:", months.length);
-
-      // Save all months
       for (const monthData of months) {
         await invoke("save_month_data", { data: monthData });
       }
 
-      // Load first month (January) after generating year data
-      if (months.length > 0) {
-        const firstMonth = months[0];
-        
-        // Recalculate storage states to ensure they're correct
-        let currentStorage = firstMonth.initial_storage;
-        const recalculatedDays = firstMonth.days.map((day) => {
-          currentStorage += day.produced;
-          return {
-            ...day,
-            storage_state: currentStorage,
-          };
-        });
+      const targetMonth = config.month;
+      const m = months.find((x) => x.config.month === targetMonth) ?? months[0];
+      setConfig(m.config);
+      const initD = nonNegativeTons(m.initial_storage);
+      setInitialStorage(initD);
+      setDays(recomputeStorageForDays(m.days, initD));
+      setYearStartStorage(nonNegativeTons(m.config.year_start_storage ?? yearStartStorage));
+      setDecemberClosingStorage(nonNegativeTons(m.config.december_closing_storage ?? decemberClosingStorage));
+      setYearlyProductionTotal(nonNegativeTons(m.config.yearly_carry_total ?? t));
+      calculateTotal();
+    } catch (error) {
+      console.error("generate_year_data (distributed):", error);
+      alert(`Greška pri generisanju (raspodela): ${error}`);
+    }
+  };
 
-        setConfig(firstMonth.config);
-        setDays(recalculatedDays);
-        setInitialStorage(firstMonth.initial_storage);
-        calculateTotal();
+  const generateYearRandom = async () => {
+    try {
+      const ys = nonNegativeTons(yearStartStorage);
+      const dec =
+        decemberClosingStorage > 0 ? nonNegativeTons(decemberClosingStorage) : null;
+      const baseConfig: WasteConfig = {
+        ...config,
+        year: config.year,
+        yearly_carry_total: null,
+        year_start_storage: ys,
+        december_closing_storage: dec,
+      };
+      const months = await invoke<MonthData[]>("generate_year_data", {
+        baseConfig,
+        yearStartStorage: ys,
+        yearlyCarryTotal: null,
+        decemberClosingStorage: dec,
+      });
+
+      for (const monthData of months) {
+        await invoke("save_month_data", { data: monthData });
       }
 
-      console.log(`Podaci za celu godinu ${config.year} su generisani i sačuvani!`);
+      const targetMonth = config.month;
+      const m = months.find((x) => x.config.month === targetMonth) ?? months[0];
+      setConfig(m.config);
+      const initR = nonNegativeTons(m.initial_storage);
+      setInitialStorage(initR);
+      setDays(recomputeStorageForDays(m.days, initR));
+      // Nasumično ne menja polja u formi (stanje, ukupna proizvodnja) — ostaju za sledeću raspodelu
+      calculateTotal();
     } catch (error) {
-      console.error("Failed to generate year data:", error);
-      alert(`Greška pri generisanju podataka za godinu: ${error}`);
+      console.error("generate_year_data (random):", error);
+      alert(`Greška pri generisanju (nasumično): ${error}`);
+    }
+  };
+
+  /** Za nasumičan mesec: januar od 0; inače kraj prethodnog meseca (ignoriše polja u formi). */
+  const getInitialStorageForMonthRandom = async (): Promise<number> => {
+    if (config.month === 1) {
+      return 0;
+    }
+    const prev = await invoke<MonthData | null>("get_month_data", {
+      year: config.year,
+      month: config.month - 1,
+    });
+    if (prev?.days?.length) {
+      return nonNegativeTons(prev.days[prev.days.length - 1].storage_state);
+    }
+    return 0;
+  };
+
+  const getCarryFromPreviousMonth = async (): Promise<number | null> => {
+    if (config.month <= 1) return null;
+    const prev = await invoke<MonthData | null>("get_month_data", {
+      year: config.year,
+      month: config.month - 1,
+    });
+    if (!prev?.days?.length) return null;
+    const last = [...prev.days].reverse().find((d) => d.produced > 0);
+    return last ? nonNegativeTons(last.produced) : null;
+  };
+
+  const generateMonthRandom = async () => {
+    try {
+      const initSt = await getInitialStorageForMonthRandom();
+      const carry = await getCarryFromPreviousMonth();
+      const cfg: WasteConfig = {
+        ...config,
+        id: `${config.year}_${String(config.month).padStart(2, "0")}`,
+        yearly_carry_total: null,
+        year_start_storage: null,
+        december_closing_storage: null,
+      };
+      const result = await invoke<MonthData>("regenerate_month_random", {
+        config: cfg,
+        initialStorage: initSt,
+        carryFirstProduced: carry,
+      });
+      const initM = nonNegativeTons(result.initial_storage);
+      const daysNorm = recomputeStorageForDays(result.days, initM);
+      const monthPayload: MonthData = {
+        config: result.config,
+        days: daysNorm,
+        initial_storage: initM,
+      };
+      await invoke("save_month_data", { data: monthPayload });
+      setConfig(result.config);
+      setInitialStorage(initM);
+      setDays(daysNorm);
+      calculateTotal();
+    } catch (error) {
+      console.error("regenerate_month_random:", error);
+      alert(`Greška pri generisanju meseca: ${error}`);
+    }
+  };
+
+  const saveCurrentMonth = async () => {
+    try {
+      const initS = nonNegativeTons(initialStorage);
+      const daysNorm = recomputeStorageForDays(days, initS);
+      const data: MonthData = {
+        config: {
+          ...config,
+          id: `${config.year}_${String(config.month).padStart(2, "0")}`,
+          yearly_carry_total:
+            yearlyProductionTotal > 0
+              ? nonNegativeTons(yearlyProductionTotal)
+              : config.yearly_carry_total ?? null,
+          year_start_storage: nonNegativeTons(yearStartStorage),
+          december_closing_storage:
+            decemberClosingStorage > 0 ? nonNegativeTons(decemberClosingStorage) : null,
+        },
+        days: daysNorm,
+        initial_storage: initS,
+      };
+      await invoke("save_month_data", { data });
+      setDays(daysNorm);
+      setInitialStorage(initS);
+    } catch (error) {
+      console.error("save_month_data:", error);
+      alert(`Greška pri čuvanju: ${error}`);
     }
   };
 
@@ -166,6 +315,7 @@ function App() {
       }
     } catch (error) {
       console.error("Failed to export year:", error);
+      alert(`Greška pri izvozu godine: ${error}`);
     }
   };
 
@@ -208,18 +358,31 @@ function App() {
   };
 
   const handleConfigChange = (newConfig: Partial<WasteConfig>) => {
-    setConfig({ ...config, ...newConfig });
+    const next = { ...config, ...newConfig };
+    if (newConfig.year !== undefined || newConfig.month !== undefined) {
+      next.id = `${next.year}_${String(next.month).padStart(2, "0")}`;
+    }
+    setConfig(next);
   };
 
   const handleDayChange = (index: number, field: keyof DayData, value: number | string) => {
     const newDays = [...days];
-    newDays[index] = { ...newDays[index], [field]: value };
+    let v: number | string = value;
+    if (field === "produced" || field === "delivered") {
+      const n = typeof value === "number" ? value : Number(value);
+      if (!Number.isNaN(n)) {
+        v = nonNegativeTons(n);
+      }
+    }
+    newDays[index] = { ...newDays[index], [field]: v };
 
-    // Recalculate storage states
-    let currentStorage = initialStorage;
+    // Stanje u mikro-jedinicama da odgovara Rust lancu (bez 0.001 drifta)
+    let currentMicro = Math.round(nonNegativeTons(initialStorage) * 1000);
     for (let i = 0; i < newDays.length; i++) {
-      currentStorage += newDays[i].produced;
-      newDays[i].storage_state = currentStorage;
+      const p = Number(newDays[i].produced);
+      const add = Number.isFinite(p) ? nonNegativeTons(p) : 0;
+      currentMicro += Math.round(add * 1000);
+      newDays[i].storage_state = nonNegativeTons(currentMicro / 1000);
     }
 
     setDays(newDays);
@@ -230,8 +393,8 @@ function App() {
     console.log("handleExportMonth called with month:", monthNum);
     
     const monthNames = [
-      "", "Јануар", "Фебруар", "Март", "Април", "Мај", "Јун",
-      "Јул", "Август", "Септембар", "Октобар", "Новембар", "Децембар"
+      "", "Januar", "Februar", "Mart", "April", "Maj", "Jun",
+      "Jul", "Avgust", "Septembar", "Oktobar", "Novembar", "Decembar"
     ];
     
     // If monthNum is not provided, show selector
@@ -241,7 +404,7 @@ function App() {
     }
     
     if (monthNum < 1 || monthNum > 12) {
-      alert("Неважећи месец!");
+      alert("Nevažeći mesec!");
       return;
     }
 
@@ -259,7 +422,7 @@ function App() {
       console.log("Month data loaded:", monthData ? `Found ${monthData.days.length} days` : "No data");
 
       if (!monthData || monthData.days.length === 0) {
-        alert(`Нема података за ${monthNames[monthNum]} ${config.year}! Молимо генеришите податке прво.`);
+        alert(`Nema podataka za ${monthNames[monthNum]} ${config.year}! Molimo generišite podatke prvo.`);
         return;
       }
 
@@ -299,7 +462,7 @@ function App() {
       });
       
       console.log("Export completed successfully");
-      alert(`Excel fajl је успешно креиран за ${monthNames[monthNum]} ${config.year}!`);
+      alert(`Excel fajl je uspešno kreiran za ${monthNames[monthNum]} ${config.year}!`);
     } catch (error) {
       console.error("Failed to export:", error);
       // Fallback: use native file path
@@ -316,14 +479,14 @@ function App() {
             data: monthDataFallback,
             outputPath: fallbackPath,
           });
-          console.log(`Excel fajl је сачуван у Downloads folderу!`);
-          alert(`Excel fajl је сачуван у Downloads folderу!`);
+          console.log(`Excel fajl je sačuvan u Downloads folderu!`);
+          alert(`Excel fajl je sačuvan u Downloads folderu!`);
         } else {
-          alert(`Нема података за ${monthNames[monthNum]} ${config.year}!`);
+          alert(`Nema podataka za ${monthNames[monthNum]} ${config.year}!`);
         }
       } catch (fallbackError) {
         console.error("Fallback export failed:", fallbackError);
-        alert(`Грешка при извозу у Excel: ${error}`);
+        alert(`Greška pri izvozu u Excel: ${error}`);
       }
     }
   };
@@ -338,7 +501,7 @@ function App() {
         color: theme.text,
       }}>
         <Loader2 size={32} style={{ margin: "0 auto 10px", animation: "spin 1s linear infinite" }} />
-        <p style={{ fontSize: "16px" }}>Учитавање...</p>
+        <p style={{ fontSize: "16px" }}>Učitavanje...</p>
       </div>
     );
   }
@@ -367,7 +530,7 @@ function App() {
             fontWeight: "600",
           }}
         >
-          Покушај поново
+          Pokušaj ponovo
         </button>
       </div>
     );
@@ -385,7 +548,7 @@ function App() {
     }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "30px" }}>
         <h1 style={{ margin: 0, color: theme.text, fontSize: "28px", fontWeight: "600" }}>
-          Дневна евиденција отпада
+          Dnevna evidencija otpada
         </h1>
         <button
           onClick={() => setDarkMode(!darkMode)}
@@ -416,7 +579,7 @@ function App() {
           }}
         >
           {darkMode ? <Sun size={18} /> : <Moon size={18} />}
-          <span>{darkMode ? "Светли режим" : "Тамни режим"}</span>
+          <span>{darkMode ? "Svetli režim" : "Tamni režim"}</span>
         </button>
       </div>
       
@@ -425,16 +588,32 @@ function App() {
         onConfigSelect={(selectedConfig) => {
           setConfig(selectedConfig);
           setInitialStorage(0.0);
+          setYearStartStorage(nonNegativeTons(selectedConfig.year_start_storage ?? 0));
+          setDecemberClosingStorage(nonNegativeTons(selectedConfig.december_closing_storage ?? 0));
+          setYearlyProductionTotal(nonNegativeTons(selectedConfig.yearly_carry_total ?? 0));
         }}
         darkMode={darkMode}
       />
       
       <HeaderForm
         config={config}
-        initialStorage={initialStorage}
+        yearStartStorage={yearStartStorage}
+        decemberClosingStorage={decemberClosingStorage}
+        yearlyProductionTotal={yearlyProductionTotal}
         onConfigChange={handleConfigChange}
-        onInitialStorageChange={setInitialStorage}
-        onGenerate={generateData}
+        onYearStartChange={setYearStartStorage}
+        onDecemberClosingChange={setDecemberClosingStorage}
+        onYearlyProductionChange={setYearlyProductionTotal}
+        onGenerateYearDistributed={generateYearDistributed}
+        onGenerateYearRandom={generateYearRandom}
+        onGenerateMonthRandom={generateMonthRandom}
+        onSaveMonth={saveCurrentMonth}
+        darkMode={darkMode}
+      />
+
+      <MonthTabs
+        selectedMonth={config.month}
+        onMonthChange={(m) => handleConfigChange({ month: m })}
         darkMode={darkMode}
       />
       
@@ -477,7 +656,7 @@ function App() {
           }}
         >
           <Download size={18} style={{ marginRight: "8px" }} />
-          Извези целу годину
+          Izvezi celu godinu
         </button>
         <button
           onClick={() => handleExportMonth()}
@@ -510,7 +689,7 @@ function App() {
           }}
         >
           <FileText size={18} />
-          Извези месец
+          Izvezi mesec
         </button>
       </div>
 
@@ -543,7 +722,7 @@ function App() {
             onClick={(e) => e.stopPropagation()}
           >
             <h2 style={{ color: theme.text, marginBottom: "20px", fontSize: "20px", fontWeight: "600" }}>
-              Изабери месец за извоз
+              Izaberi mesec za izvoz
             </h2>
             <div
               style={{
@@ -554,8 +733,8 @@ function App() {
               }}
             >
               {[
-                "Јануар", "Фебруар", "Март", "Април", "Мај", "Јун",
-                "Јул", "Август", "Септембар", "Октобар", "Новембар", "Децембар"
+                "Januar", "Februar", "Mart", "April", "Maj", "Jun",
+                "Jul", "Avgust", "Septembar", "Oktobar", "Novembar", "Decembar"
               ].map((name, index) => (
                 <button
                   key={index + 1}
@@ -600,7 +779,7 @@ function App() {
                 fontWeight: "600",
               }}
             >
-              Откажи
+              Otkaži
             </button>
           </div>
         </div>

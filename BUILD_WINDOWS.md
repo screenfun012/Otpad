@@ -1,52 +1,61 @@
-# Windows instalacija — jedan klik
+# Windows paket — MSI i NSIS
 
-**Brzo:** [GitHub Actions](https://github.com/screenfun012/Otpad/actions) → **Build Windows installers** → sačekaj zeleni run → **Artifacts** → **Evidencija-Otpada-Windows-installers** → preuzmi ZIP na PC i instaliraj `.msi` ili `.exe`.
-
-Na **macOS/Linux ne možeš** lokalno da napraviš pravi Windows installer (Tauri zahteva MSVC + alate koji postoje samo na Windowsu). Zato imaš dve praktične opcije ispod.
+Sa **macOS** ne možeš lokalno da napraviš Windows **MSI** (WiX radi samo na Windowsu). Zato je praktično: **GitHub Actions** ili **Windows mašina**.
 
 ---
 
-## Opcija A: GitHub Actions (preporučeno — ostaješ na Macu)
+## 1. GitHub Actions (preporuka sa Maca)
 
-1. Okači projekat na GitHub (privatan ili javni repo).
-2. U repou: **Actions** → **Build Windows installers** → **Run workflow** (ili samo uradi push na `main` / `master` — workflow se pokreće automatski).
-3. Kad job završi, otvori taj run → na dnu **Artifacts** → preuzmi **Evidencija-Otpada-Windows-installers** (jedan ZIP sa `msi/` i `nsis/` folderima).
-4. Na Windowsu raspakuj ZIP, uđi u `msi` ili `nsis`, pokreni `.msi` ili setup `.exe` i prati čarobnjaka — to je to.
+1. Push repozitorijum na GitHub (`main` / `master` ili tag `v*`).
+2. **Actions** → **Build Windows installers** → otvori poslednji uspešan run.
+3. Na dnu: **Artifacts** → **Evidencija-Otpada-Windows-installers** (ZIP).
+4. Na Windows PC raspakuj ZIP:
+   - `msi/` → `.msi` (Windows Installer)
+   - `nsis/` → `*-setup.exe` (NSIS čarobnjak)
 
-Instalirana aplikacija: ime kao u `tauri.conf.json` (**Evidencija Otpada**), verzija iz `src-tauri/tauri.conf.json` / `Cargo.toml`.
+Ručno pokretanje: Actions → **Build Windows installers** → **Run workflow**.
 
 ---
 
-## Opcija B: Build direktno na Windows mašini
+## 2. Build na Windowsu (lokalno)
 
-1. Kopiraj ceo folder projekta (npr. USB ili mreža).
-2. Instaliraj [Node.js LTS](https://nodejs.org/) i [Rust](https://rustup.rs/) (podrazumevani toolchain na Windowsu je dovoljan).
-3. U rootu projekta u PowerShell ili CMD:
+PowerShell ili CMD u korenu projekta:
 
 ```bat
 npm install
 npm run tauri:build
 ```
 
-4. Instaleri su ovde:
-   - `src-tauri\target\release\bundle\msi\` — `.msi`
-   - `src-tauri\target\release\bundle\nsis\` — `.exe`
+Instalatori:
 
-Te fajlove možeš da kopiraš na drugi PC i pokreneš — nije potrebno ponovo buildovati.
-
----
-
-## Šta tačno dobijaš
-
-| Fajl | Opis |
-|------|------|
-| **MSI** | Standardni Windows installer |
-| **NSIS (.exe)** | Alternativni setup |
-
-Oba rade „klik instal“; izaberi jedan koji ti više odgovara.
+- `src-tauri\target\release\bundle\msi\`
+- `src-tauri\target\release\bundle\nsis\`
 
 ---
 
-## Napomena o potpisivanju
+## 3. Verzija aplikacije
 
-Buildovi iz ovog projekta su **nepotpisani**. Windows SmartScreen može da upozori pri prvom pokretanju — „More info“ → „Run anyway“ (ili potpiši aplikaciju kasnije sertifikatom ako treba za firmu).
+Isti broj drži usklađen u:
+
+- `package.json` → `"version"`
+- `src-tauri/tauri.conf.json` → `"version"`
+- `src-tauri/Cargo.toml` → `version = "..."`
+
+Pre release-a podigni verziju u sva tri, pa push / tag.
+
+---
+
+## 4. SmartScreen (nepotpisani build)
+
+Instalacija može prikazati upozorenje. **More info** → **Run anyway**, ili kasnije potpiši kod sertifikatom ako firma zahteva.
+
+---
+
+## 5. Šta dobijaš
+
+| Fajl   | Opis              |
+| ------ | ----------------- |
+| `.msi` | Klasičan installer |
+| `.exe` | NSIS setup        |
+
+Oba instaliraju **Evidencija Otpada** (ime iz `tauri.conf.json`).

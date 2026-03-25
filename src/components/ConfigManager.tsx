@@ -1,5 +1,5 @@
-import { useState, useEffect } from "react";
-import { invoke } from "@tauri-apps/api/core";
+import { useState, useEffect, type CSSProperties } from "react";
+import { invoke } from "../utils/tauriInvoke";
 import type { WasteConfig } from "../types";
 
 interface ConfigManagerProps {
@@ -19,16 +19,41 @@ export default function ConfigManager({
     border: "#30363d",
     inputBg: "#21262d",
     button: "#dc2626",
-    buttonSecondary: "#6b6b6b",
+    buttonSecondary: "#30363d",
     surface: "#21262d",
+    chevron: "%23c9d1d9",
   } : {
     bg: "#ffffff",
     text: "#1f2328",
     border: "#d1d9e0",
     inputBg: "#ffffff",
     button: "#dc2626",
-    buttonSecondary: "#6c757d",
+    buttonSecondary: "#e1e4e8",
     surface: "#f8f9fa",
+    chevron: "%231f2328",
+  };
+
+  const selectStyle: CSSProperties = {
+    width: "100%",
+    padding: "12px 42px 12px 14px",
+    borderRadius: "10px",
+    border: `1px solid ${theme.border}`,
+    fontSize: "14px",
+    fontWeight: 500,
+    backgroundColor: theme.inputBg,
+    color: theme.text,
+    cursor: "pointer",
+    appearance: "none",
+    WebkitAppearance: "none",
+    MozAppearance: "none",
+    backgroundImage: `url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='${theme.chevron}' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E")`,
+    backgroundRepeat: "no-repeat",
+    backgroundPosition: "right 12px center",
+    backgroundSize: "16px",
+    outline: "none",
+    colorScheme: darkMode ? "dark" : "light",
+    boxSizing: "border-box",
+    transition: "border-color 0.15s, box-shadow 0.15s",
   };
   const [configs, setConfigs] = useState<WasteConfig[]>([]);
   const [showForm, setShowForm] = useState(false);
@@ -37,9 +62,12 @@ export default function ConfigManager({
     year: new Date().getFullYear(),
     month: new Date().getMonth() + 1,
     index_number: "170402",
-    waste_name: "Отпадни алуминијум",
-    waste_description: "неопасан отпад",
-    record_keeper: "Наташа Јевтић",
+    waste_name: "Otpadni aluminium",
+    waste_description: "neopasan otpad",
+    record_keeper: "Nataša Jevtić",
+    yearly_carry_total: null,
+    year_start_storage: null,
+    december_closing_storage: null,
   });
 
   useEffect(() => {
@@ -68,9 +96,12 @@ export default function ConfigManager({
         year: new Date().getFullYear(),
         month: new Date().getMonth() + 1,
         index_number: "170402",
-        waste_name: "Отпадни алуминијум",
-        waste_description: "неопасан отпад",
-        record_keeper: "Наташа Јевтић",
+        waste_name: "Otpadni aluminium",
+        waste_description: "neopasan otpad",
+        record_keeper: "Nataša Jevtić",
+        yearly_carry_total: null,
+        year_start_storage: null,
+        december_closing_storage: null,
       });
     } catch (error) {
       console.error("Failed to save config:", error);
@@ -82,24 +113,27 @@ export default function ConfigManager({
     <div
       style={{
         backgroundColor: theme.bg,
-        padding: "20px",
+        padding: "20px 24px",
         borderRadius: "12px",
         marginBottom: "24px",
+        marginLeft: "auto",
+        marginRight: "auto",
+        maxWidth: "960px",
         border: `1px solid ${theme.border}`,
         boxShadow: darkMode ? "0 4px 6px rgba(0,0,0,0.3)" : "0 2px 4px rgba(0,0,0,0.1)",
         transition: "all 0.3s",
       }}
     >
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "15px" }}>
-        <h3 style={{ color: theme.text, fontSize: "18px", fontWeight: "600", margin: 0 }}>Конфигурације отпада</h3>
+        <h3 style={{ color: theme.text, fontSize: "18px", fontWeight: "600", margin: 0 }}>Konfiguracije otpada</h3>
         <button
           onClick={() => setShowForm(!showForm)}
           style={{
             padding: "10px 20px",
             backgroundColor: theme.buttonSecondary,
-            color: "#fff",
-            border: "none",
-            borderRadius: "8px",
+            color: theme.text,
+            border: `1px solid ${theme.border}`,
+            borderRadius: "10px",
             cursor: "pointer",
             fontSize: "14px",
             fontWeight: "500",
@@ -114,7 +148,7 @@ export default function ConfigManager({
             e.currentTarget.style.boxShadow = "none";
           }}
         >
-          {showForm ? "Откажи" : "Додај нову"}
+          {showForm ? "Otkaži" : "Dodaj novu"}
         </button>
       </div>
 
@@ -131,7 +165,7 @@ export default function ConfigManager({
           <div style={{ display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: "10px", marginBottom: "10px" }}>
             <div>
               <label style={{ display: "block", marginBottom: "8px", fontSize: "13px", color: theme.text, fontWeight: "500" }}>
-                Назив отпада
+                Naziv otpada
               </label>
               <input
                 type="text"
@@ -151,7 +185,7 @@ export default function ConfigManager({
             </div>
             <div>
               <label style={{ display: "block", marginBottom: "8px", fontSize: "13px", color: theme.text, fontWeight: "500" }}>
-                Индексни број
+                Indeksni broj
               </label>
               <input
                 type="text"
@@ -171,7 +205,7 @@ export default function ConfigManager({
             </div>
             <div>
               <label style={{ display: "block", marginBottom: "8px", fontSize: "13px", color: theme.text, fontWeight: "500" }}>
-                Опис отпада
+                Opis otpada
               </label>
               <input
                 type="text"
@@ -191,7 +225,7 @@ export default function ConfigManager({
             </div>
             <div>
               <label style={{ display: "block", marginBottom: "8px", fontSize: "13px", color: theme.text, fontWeight: "500" }}>
-                Евиденцију води
+                Evidenciju vodi
               </label>
               <input
                 type="text"
@@ -235,15 +269,15 @@ export default function ConfigManager({
               e.currentTarget.style.backgroundColor = theme.button;
             }}
           >
-            Сачувај конфигурацију
+            Sačuvaj konfiguraciju
           </button>
         </div>
       )}
 
       {configs.length > 0 && (
         <div>
-          <label style={{ display: "block", marginBottom: "8px", fontSize: "14px", color: theme.text, fontWeight: "500" }}>
-            Изабери конфигурацију:
+          <label style={{ display: "block", marginBottom: "8px", fontSize: "14px", color: theme.text, fontWeight: "600" }}>
+            Izaberi konfiguraciju
           </label>
           <select
             value={currentConfig.id || ""}
@@ -253,18 +287,17 @@ export default function ConfigManager({
                 onConfigSelect(selected);
               }
             }}
-            style={{
-              width: "100%",
-              padding: "10px",
-              border: `1px solid ${theme.border}`,
-              borderRadius: "6px",
-              fontSize: "14px",
-              backgroundColor: theme.inputBg,
-              color: theme.text,
-              transition: "all 0.2s",
+            style={selectStyle}
+            onFocus={(e) => {
+              e.currentTarget.style.borderColor = "#dc2626";
+              e.currentTarget.style.boxShadow = "0 0 0 2px rgba(220, 38, 38, 0.25)";
+            }}
+            onBlur={(e) => {
+              e.currentTarget.style.borderColor = theme.border;
+              e.currentTarget.style.boxShadow = "none";
             }}
           >
-            <option value="">-- Изабери конфигурацију --</option>
+            <option value="">-- Izaberi konfiguraciju --</option>
             {configs.map((config) => (
               <option key={config.id} value={config.id}>
                 {config.waste_name} ({config.index_number})

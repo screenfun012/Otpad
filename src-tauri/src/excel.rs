@@ -8,17 +8,17 @@ pub fn export_to_excel(data: &MonthData, output_path: PathBuf) -> Result<(), Str
 
     // Set column widths to match the example file (A4 format)
     worksheet.set_column_width(0, 6.14).map_err(|e| e.to_string())?;  // A: Datum
-    worksheet.set_column_width(1, 11.29).map_err(|e| e.to_string())?; // B: Произведена
-    worksheet.set_column_width(2, 9.71).map_err(|e| e.to_string())?;  // C: Предата
-    worksheet.set_column_width(3, 12.14).map_err(|e| e.to_string())?;  // D: Стање
-    worksheet.set_column_width(4, 4.14).map_err(|e| e.to_string())?;  // E: Сакупљачу
-    worksheet.set_column_width(5, 8.14).map_err(|e| e.to_string())?;  // F: Оператеру на поновно
-    worksheet.set_column_width(6, 4.14).map_err(|e| e.to_string())?;   // G: R ознака
-    worksheet.set_column_width(7, 7.57).map_err(|e| e.to_string())?; // H: Оператеру на одлагање
-    worksheet.set_column_width(8, 4.14).map_err(|e| e.to_string())?; // I: D ознака
-    worksheet.set_column_width(9, 13.0).map_err(|e| e.to_string())?;  // J: Извоз
-    worksheet.set_column_width(10, 14.43).map_err(|e| e.to_string())?; // K: Назив предузећа
-    worksheet.set_column_width(11, 8.0).map_err(|e| e.to_string())?;   // L: Број дозволе
+    worksheet.set_column_width(1, 11.29).map_err(|e| e.to_string())?; // B: proizvedena
+    worksheet.set_column_width(2, 9.71).map_err(|e| e.to_string())?;  // C: predato
+    worksheet.set_column_width(3, 12.14).map_err(|e| e.to_string())?;  // D: stanje
+    worksheet.set_column_width(4, 4.14).map_err(|e| e.to_string())?;  // E: sakupjaču
+    worksheet.set_column_width(5, 8.14).map_err(|e| e.to_string())?;  // F: operatoru
+    worksheet.set_column_width(6, 4.14).map_err(|e| e.to_string())?;   // G: R oznaka
+    worksheet.set_column_width(7, 7.57).map_err(|e| e.to_string())?; // H: odlaganje
+    worksheet.set_column_width(8, 4.14).map_err(|e| e.to_string())?; // I: D oznaka
+    worksheet.set_column_width(9, 13.0).map_err(|e| e.to_string())?;  // J: izvoz
+    worksheet.set_column_width(10, 14.43).map_err(|e| e.to_string())?; // K: naziv preduzeća
+    worksheet.set_column_width(11, 8.0).map_err(|e| e.to_string())?;   // L: broj dozvole
 
     write_month_to_sheet(worksheet, data, 0)?;
 
@@ -75,7 +75,7 @@ fn write_month_to_sheet<'a>(worksheet: &'a mut Worksheet, data: &MonthData, star
         .set_border(FormatBorder::Medium)
         .set_text_wrap();
 
-    let title_format = Format::new()
+    let _title_format = Format::new()
         .set_background_color("#D9D9D9")
         .set_font_name("Calibri")
         .set_font_size(11)
@@ -99,16 +99,21 @@ fn write_month_to_sheet<'a>(worksheet: &'a mut Worksheet, data: &MonthData, star
 
     let mut row = start_row;
 
-    // Row 1: ПРИЛОГ 1. - merge K1:L1 across 2 rows
-    worksheet.merge_range(row, 10, row + 1, 11, "ПРИЛОГ 1.", &data_format).map_err(|e| e.to_string())?;
-    
-    // Row 2: ОБРАЗАЦ ДЕО 1 - merge K2:L2 (same merge range as row 1, but different text)
-    // We'll write it in the second row of the merged range
-    write_cell!(row + 1, 10, "ОБРАЗАЦ ДЕО 1", &data_format);
+    // Row 1–2: Prilog 1. + Obrazac deo 1 (single merge; no extra write into merged cell)
+    worksheet
+        .merge_range(
+            row,
+            10,
+            row + 1,
+            11,
+            "Prilog 1.\nObrazac deo 1",
+            &data_format,
+        )
+        .map_err(|e| e.to_string())?;
     row += 2;
 
-    // Row 3: ДНЕВНА ЕВИДЕНЦИЈА О ОТПАДУ ПРОИЗВОЂАЧА ОТПАДА 1 - merge B3:I3 across 2 rows
-    worksheet.merge_range(row, 1, row + 1, 8, "ДНЕВНА ЕВИДЕНЦИЈА О ОТПАДУ ПРОИЗВОЂАЧА ОТПАДА 1", &data_format).map_err(|e| e.to_string())?;
+    // Row 3: title merge
+    worksheet.merge_range(row, 1, row + 1, 8, "DNEVNA EVIDENCIJA O OTPADU PROIZVOĐAČA OTPADA 1", &data_format).map_err(|e| e.to_string())?;
     row += 2;
 
     // Empty row
@@ -133,57 +138,57 @@ fn write_month_to_sheet<'a>(worksheet: &'a mut Worksheet, data: &MonthData, star
         .set_text_wrap()
         .set_align(FormatAlign::Center);
 
-    // Row 5: Година - 5 cells for label (B5:F5 gray), 5 cells for value (G5:K5 white)
-    worksheet.merge_range(row, 1, row, 5, "Година", &title_format_bold).map_err(|e| e.to_string())?;
+    // Row 5: Godina
+    worksheet.merge_range(row, 1, row, 5, "Godina", &title_format_bold).map_err(|e| e.to_string())?;
     worksheet.merge_range(row, 6, row, 10, &data.config.year.to_string(), &value_format).map_err(|e| e.to_string())?;
     row += 1;
 
     // Empty row
     row += 1;
 
-    // Row 7: Месец - 5 cells for label, 5 cells for value
+    // Row 7: Mesec
     let month_names = [
-        "", "Јануар", "Фебруар", "Март", "Април", "Мај", "Јун",
-        "Јул", "Август", "Септембар", "Октобар", "Новембар", "Децембар"
+        "", "Januar", "Februar", "Mart", "April", "Maj", "Jun",
+        "Jul", "Avgust", "Septembar", "Oktobar", "Novembar", "Decembar"
     ];
     let month_name = if data.config.month <= 12 {
         month_names[data.config.month as usize]
     } else {
         ""
     };
-    worksheet.merge_range(row, 1, row, 5, "Месец", &title_format_bold).map_err(|e| e.to_string())?;
+    worksheet.merge_range(row, 1, row, 5, "Mesec", &title_format_bold).map_err(|e| e.to_string())?;
     worksheet.merge_range(row, 6, row, 10, month_name, &value_format).map_err(|e| e.to_string())?;
     row += 1;
 
     // Empty row
     row += 1;
 
-    // Row 9: Индексни број отпада из Каталога отпада - 5 cells for label, 5 cells for value
-    worksheet.merge_range(row, 1, row, 5, "Индексни број отпада из Каталога отпада", &title_format_bold).map_err(|e| e.to_string())?;
+    // Row 9
+    worksheet.merge_range(row, 1, row, 5, "Indeksni broj otpada iz Kataloga otpada", &title_format_bold).map_err(|e| e.to_string())?;
     worksheet.merge_range(row, 6, row, 10, &data.config.index_number, &value_format).map_err(|e| e.to_string())?;
     row += 1;
 
     // Empty row
     row += 1;
 
-    // Row 11: Назив отпада - 5 cells for label, 5 cells for value
-    worksheet.merge_range(row, 1, row, 5, "Назив отпада", &title_format_bold).map_err(|e| e.to_string())?;
+    // Row 11
+    worksheet.merge_range(row, 1, row, 5, "Naziv otpada", &title_format_bold).map_err(|e| e.to_string())?;
     worksheet.merge_range(row, 6, row, 10, &data.config.waste_name, &value_format).map_err(|e| e.to_string())?;
     row += 1;
 
     // Empty row
     row += 1;
 
-    // Row 13: Опис отпада - 5 cells for label, 5 cells for value
-    worksheet.merge_range(row, 1, row, 5, "Опис отпада", &title_format_bold).map_err(|e| e.to_string())?;
+    // Row 13
+    worksheet.merge_range(row, 1, row, 5, "Opis otpada", &title_format_bold).map_err(|e| e.to_string())?;
     worksheet.merge_range(row, 6, row, 10, &data.config.waste_description, &value_format).map_err(|e| e.to_string())?;
     row += 1;
 
     // Empty row
     row += 1;
 
-    // Row 15: Евиденцију води (Име и презиме) - 5 cells for label, 5 cells for value
-    worksheet.merge_range(row, 1, row, 5, "Евиденцију води (Име и презиме)", &title_format_bold).map_err(|e| e.to_string())?;
+    // Row 15
+    worksheet.merge_range(row, 1, row, 5, "Evidenciju vodi (ime i prezime)", &title_format_bold).map_err(|e| e.to_string())?;
     worksheet.merge_range(row, 6, row, 10, &data.config.record_keeper, &value_format).map_err(|e| e.to_string())?;
     row += 1;
 
@@ -191,24 +196,24 @@ fn write_month_to_sheet<'a>(worksheet: &'a mut Worksheet, data: &MonthData, star
     row += 2;
 
     // Row 18: Headers - merge cells for headers (A18:D18 and E18:L18)
-    worksheet.merge_range(row, 0, row, 3, "ПРОИЗВЕДЕНЕ КОЛИЧИНЕ ОТАДА", &header_format).map_err(|e| e.to_string())?;
-    worksheet.merge_range(row, 4, row, 11, "ОТПАД ПРЕДАТ", &header_format).map_err(|e| e.to_string())?;
+    worksheet.merge_range(row, 0, row, 3, "PROIZVEDENE KOLIČINE OTPADA", &header_format).map_err(|e| e.to_string())?;
+    worksheet.merge_range(row, 4, row, 11, "OTPAD PREDAT", &header_format).map_err(|e| e.to_string())?;
     row += 1;
 
     // Row 19: Column headers
     let headers = [
-        "Датум",
-        "Произведена количина отпада (т)",
-        "Предата количина отпада (т)",
-        "Стање на привременом складишту (т)",
-        "Сакупљачу 2",
-        "Оператеру на поновно искорићење 2",
-        "R ознака",
-        "Оператеру на одлагање 2",
-        "D ознака",
-        "Извоз 2",
-        "Назив предузећа којем је отпад предат",
-        "Број дозволе",
+        "Datum",
+        "Proizvedena količina otpada (t)",
+        "Predata količina otpada (t)",
+        "Stanje na privremenom skladištu (t)",
+        "Sakupljaču 2",
+        "Operatoru na ponovno iskorišćenje 2",
+        "R oznaka",
+        "Operatoru na odlaganje 2",
+        "D oznaka",
+        "Izvoz 2",
+        "Naziv preduzeća kojem je otpad predat",
+        "Broj dozvole",
     ];
 
     for (col, header) in headers.iter().enumerate() {
@@ -248,7 +253,7 @@ fn write_month_to_sheet<'a>(worksheet: &'a mut Worksheet, data: &MonthData, star
         start_row += 1;
     }
 
-    // Укупно row
+    // Total row
     let data_end_row = start_row;
     let rows_to_add = if data_end_row < data_start_row + 19 { 
         (data_start_row + 19) - data_end_row 
@@ -257,21 +262,24 @@ fn write_month_to_sheet<'a>(worksheet: &'a mut Worksheet, data: &MonthData, star
     };
     let total_row = data_end_row + rows_to_add;
     
-    write_cell!(total_row, 0, "Укупно", &data_format);
+    write_cell!(total_row, 0, "Ukupno", &data_format);
     
-    // Calculate sum formula for column B (Произведена количина отпада)
+    // Empty month: invalid SUM range without this guard
     let sum_start_excel = data_start_row + 1; // Excel is 1-indexed
     let sum_end_excel = data_end_row;
-    let sum_formula = format!("=SUM(B{}:B{})", sum_start_excel, sum_end_excel);
-    write_cell!(total_row, 1, Formula::new(&sum_formula), &data_format);
-
-    // Sum formula for column C (Предата количина отпада)
-    let sum_formula_c = format!("=SUM(C{}:C{})", sum_start_excel, sum_end_excel);
-    write_cell!(total_row, 2, Formula::new(&sum_formula_c), &data_format);
+    if sum_end_excel >= sum_start_excel {
+        let sum_formula = format!("=SUM(B{}:B{})", sum_start_excel, sum_end_excel);
+        write_cell!(total_row, 1, Formula::new(&sum_formula), &data_format);
+        let sum_formula_c = format!("=SUM(C{}:C{})", sum_start_excel, sum_end_excel);
+        write_cell!(total_row, 2, Formula::new(&sum_formula_c), &data_format);
+    } else {
+        write_cell!(total_row, 1, 0.0, &data_format);
+        write_cell!(total_row, 2, 0.0, &data_format);
+    }
 
     // Footer notes - merge across multiple columns
-    worksheet.merge_range(total_row + 2, 0, total_row + 2, 11, "1 Евиденција се води за сваку врсту отпада посебно", &data_format).map_err(|e| e.to_string())?;
-    worksheet.merge_range(total_row + 3, 0, total_row + 3, 11, "2 Означити са X у одговарајућем пољу", &data_format).map_err(|e| e.to_string())?;
+    worksheet.merge_range(total_row + 2, 0, total_row + 2, 11, "1 Evidencija se vodi za svaku vrstu otpada posebno", &data_format).map_err(|e| e.to_string())?;
+    worksheet.merge_range(total_row + 3, 0, total_row + 3, 11, "2 Označiti sa X u odgovarajućem polju", &data_format).map_err(|e| e.to_string())?;
 
     Ok(total_row + 4)
 }

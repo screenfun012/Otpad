@@ -1,5 +1,11 @@
 import { BarChart3 } from "lucide-react";
 import type { DayData } from "../types";
+import {
+  formatTonsDisplay,
+  formatTonsTableCell,
+  nonNegativeTons,
+  parseTonsInput,
+} from "../utils/parseTonsInput";
 
 interface WasteTableProps {
   days: DayData[];
@@ -65,7 +71,7 @@ export default function WasteTable({
                 fontSize: "14px",
               }}
             >
-              Датум
+              Datum
             </th>
             <th
               style={{
@@ -77,7 +83,7 @@ export default function WasteTable({
                 fontSize: "14px",
               }}
             >
-              Произведена количина отпада (т)
+              Proizvedena količina otpada (t)
             </th>
             <th
               style={{
@@ -89,7 +95,7 @@ export default function WasteTable({
                 fontSize: "14px",
               }}
             >
-              Предата количина отпада (т)
+              Predata količina otpada (t)
             </th>
             <th
               style={{
@@ -101,7 +107,7 @@ export default function WasteTable({
                 fontSize: "14px",
               }}
             >
-              Стање на привременом складишту (т)
+              Stanje na privremenom skladištu (t)
             </th>
           </tr>
         </thead>
@@ -124,21 +130,19 @@ export default function WasteTable({
                 }}
               >
                 <input
-                  type="number"
-                  step="0.0001"
-                  min="0"
-                  value={day.produced === 0 ? "" : day.produced.toFixed(4)}
+                  type="text"
+                  inputMode="decimal"
+                  autoComplete="off"
+                  value={formatTonsTableCell(day.produced)}
                   onChange={(e) => {
                     const inputValue = e.target.value;
-                    if (inputValue === "") {
+                    if (inputValue.trim() === "") {
                       onDayChange(index, "produced", 0);
                       return;
                     }
-                    const val = parseFloat(inputValue);
-                    if (!isNaN(val) && val >= 0) {
-                      // Round to 4 decimal places
-                      const rounded = Math.round(val * 10000) / 10000;
-                      onDayChange(index, "produced", rounded);
+                    const val = parseTonsInput(inputValue);
+                    if (val !== null) {
+                      onDayChange(index, "produced", nonNegativeTons(val));
                     }
                   }}
                   style={{
@@ -168,12 +172,21 @@ export default function WasteTable({
                 }}
               >
                 <input
-                  type="number"
-                  step="0.0001"
-                  value={day.delivered}
-                  onChange={(e) =>
-                    onDayChange(index, "delivered", parseFloat(e.target.value) || 0)
-                  }
+                  type="text"
+                  inputMode="decimal"
+                  autoComplete="off"
+                  value={formatTonsTableCell(day.delivered)}
+                  onChange={(e) => {
+                    const v = e.target.value;
+                    if (v.trim() === "") {
+                      onDayChange(index, "delivered", 0);
+                      return;
+                    }
+                    const val = parseTonsInput(v);
+                    if (val !== null) {
+                      onDayChange(index, "delivered", nonNegativeTons(val));
+                    }
+                  }}
                   style={{
                     width: "100%",
                     padding: "8px",
@@ -202,7 +215,7 @@ export default function WasteTable({
                   color: theme.text,
                 }}
               >
-                {day.storage_state.toFixed(4)}
+                {formatTonsDisplay(day.storage_state)}
               </td>
             </tr>
           ))}
@@ -215,7 +228,7 @@ export default function WasteTable({
               }}
             >
               <BarChart3 size={16} style={{ display: "inline", marginRight: "6px", verticalAlign: "middle" }} />
-              Укупно
+              Ukupno
             </td>
             <td
               style={{
@@ -224,7 +237,7 @@ export default function WasteTable({
                 color: theme.text,
               }}
             >
-              {totalProduced.toFixed(4)}
+              {formatTonsDisplay(totalProduced)}
             </td>
             <td
               style={{
@@ -233,7 +246,7 @@ export default function WasteTable({
                 color: theme.text,
               }}
             >
-              {days.reduce((sum, day) => sum + day.delivered, 0).toFixed(4)}
+              {formatTonsDisplay(days.reduce((sum, day) => sum + day.delivered, 0))}
             </td>
             <td
               style={{

@@ -1,5 +1,5 @@
-# Gradi Windows instalere (MSI + NSIS) na Microsoft serveru.
-# Sa Maca: push na GitHub → Actions → poslednji job → Artifacts → preuzmi ZIP.
+# Windows MSI + NSIS na GitHub runneru (ne radi lokalno sa Mac/Linux za MSI).
+# Posle builda: Actions → ovaj workflow → Artifacts → Evidencija-Otpada-Windows
 
 name: Build Windows installers
 
@@ -7,6 +7,7 @@ on:
   workflow_dispatch:
   push:
     branches: [main, master]
+    tags: ["v*"]
 
 jobs:
   windows:
@@ -29,13 +30,18 @@ jobs:
         with:
           targets: x86_64-pc-windows-msvc
 
-      - name: Install npm dependencies
+      - name: Cache Cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: Install dependencies
         run: npm ci
 
-      - name: Build Tauri (frontend + Rust + bundle)
+      - name: Build Tauri (Vite + Rust + MSI + NSIS)
         run: npm run tauri:build
 
-      - name: Upload installers (MSI + NSIS u jednom ZIP-u)
+      - name: Upload installers
         uses: actions/upload-artifact@v4
         with:
           name: Evidencija-Otpada-Windows-installers
