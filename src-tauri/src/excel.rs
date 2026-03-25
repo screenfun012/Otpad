@@ -96,6 +96,14 @@ fn write_month_to_sheet<'a>(worksheet: &'a mut Worksheet, data: &MonthData, star
         .set_border(FormatBorder::Thin)
         .set_text_wrap();
 
+    // Uvek 3 decimale u prikazu (1.640), ne 1.64 — Excel inače skida krajnju nulu.
+    let data_format_tons = Format::new()
+        .set_font_name("Calibri")
+        .set_font_size(11)
+        .set_border(FormatBorder::Thin)
+        .set_text_wrap()
+        .set_num_format("0.000");
+
     // Helper macro to write cells with error handling
     macro_rules! write_cell {
         ($row:expr, $col:expr, $value:expr, $format:expr) => {
@@ -237,9 +245,9 @@ fn write_month_to_sheet<'a>(worksheet: &'a mut Worksheet, data: &MonthData, star
         write_cell!(start_row, 0, &day.date, &data_format);
         // 3 decimale (t); kolona D kao vrednost iz podataka — ne Excel formula (formula daje float drift do 1.641)
         let produced_f = round3(day.produced.max(0.0));
-        write_cell!(start_row, 1, produced_f, &data_format);
-        write_cell!(start_row, 2, round3(day.delivered.max(0.0)), &data_format);
-        write_cell!(start_row, 3, round3(day.storage_state.max(0.0)), &data_format);
+        write_cell!(start_row, 1, produced_f, &data_format_tons);
+        write_cell!(start_row, 2, round3(day.delivered.max(0.0)), &data_format_tons);
+        write_cell!(start_row, 3, round3(day.storage_state.max(0.0)), &data_format_tons);
         
         // Write empty cells for remaining columns (4-11) with borders
         for col in 4..=11 {
@@ -265,12 +273,12 @@ fn write_month_to_sheet<'a>(worksheet: &'a mut Worksheet, data: &MonthData, star
     let sum_end_excel = data_end_row;
     if sum_end_excel >= sum_start_excel {
         let sum_formula = format!("=SUM(B{}:B{})", sum_start_excel, sum_end_excel);
-        write_cell!(total_row, 1, Formula::new(&sum_formula), &data_format);
+        write_cell!(total_row, 1, Formula::new(&sum_formula), &data_format_tons);
         let sum_formula_c = format!("=SUM(C{}:C{})", sum_start_excel, sum_end_excel);
-        write_cell!(total_row, 2, Formula::new(&sum_formula_c), &data_format);
+        write_cell!(total_row, 2, Formula::new(&sum_formula_c), &data_format_tons);
     } else {
-        write_cell!(total_row, 1, 0.0, &data_format);
-        write_cell!(total_row, 2, 0.0, &data_format);
+        write_cell!(total_row, 1, 0.0, &data_format_tons);
+        write_cell!(total_row, 2, 0.0, &data_format_tons);
     }
 
     // Footer notes - merge across multiple columns
