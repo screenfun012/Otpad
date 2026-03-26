@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import HeaderForm from "./components/HeaderForm";
 import MonthTabs from "./components/MonthTabs";
 import WasteTable from "./components/WasteTable";
@@ -7,6 +7,7 @@ import { invoke, save } from "./utils/tauriInvoke";
 import { Moon, Sun, Download, FileText, Loader2, AlertTriangle } from "lucide-react";
 import type { WasteConfig, DayData, MonthData } from "./types";
 import { nonNegativeTons } from "./utils/parseTonsInput";
+import { monthDataForExport } from "./utils/monthDataForExport";
 
 /** Proizvedeno/predato ≥ 0; stanje u lancu ≥ 0 (t). Lanac u celim mikro-jedinicama (kao u Rust) da nema 1.640 → 1.641 od zaokruživanja. */
 function recomputeStorageForDays(days: DayData[], initialStorage: number): DayData[] {
@@ -44,18 +45,70 @@ function App() {
   const [error, setError] = useState<string | null>(null);
   const [darkMode, setDarkMode] = useState(false);
   const [showMonthSelector, setShowMonthSelector] = useState(false);
+  /** ID iz liste šablona (config_*). Drži se odvojeno od id meseca (YYYY_MM) da <select> uvek ima validnu vrednost. */
+  const [selectedTemplateId, setSelectedTemplateId] = useState<string | null>(null);
+  /**
+   * Nacrt zaglavlja iz „Dodaj novu“ — samo ref (bez setState pri svakom karakteru),
+   * da roditelj ne re-renderuje celu aplikaciju i ne kvari kontrolisana polja.
+   */
+  const exportHeaderDraftRef = useRef<WasteConfig | null>(null);
+
+  const exportHeaderForExcel = (): WasteConfig => {
+    const d = exportHeaderDraftRef.current;
+    if (d) {
+      return {
+        ...config,
+        index_number: d.index_number,
+        waste_name: d.waste_name,
+        waste_description: d.waste_description,
+        record_keeper: d.record_keeper,
+      };
+    }
+    return config;
+  };
+
+  /**
+   * Posle promene godine: merge identiteta otpada u setConfig mora da koristi snapshot iz trenutka
+   * promene (ne setConfig(prev) posle await — Strict Mode / dva učitavanja bi pregazila izbor).
+   * Zastareli odgovori se ignorišu preko loadRequestId.
+   */
+  const pendingIdentityMergeRef = useRef<{
+    index_number: string;
+    waste_name: string;
+    waste_description: string;
+    record_keeper: string;
+  } | null>(null);
+  const loadRequestId = useRef(0);
 
   const loadMonthData = async () => {
+    const myId = ++loadRequestId.current;
+    const identitySnapshot = pendingIdentityMergeRef.current
+      ? { ...pendingIdentityMergeRef.current }
+      : null;
+
+    const year = config.year;
+    const month = config.month;
+
     setLoading(true);
     setError(null);
     try {
       const data = await invoke<MonthData | null>("get_month_data", {
-        year: config.year,
-        month: config.month,
+        year,
+        month,
       });
 
+      if (myId !== loadRequestId.current) return;
+
       if (data) {
-        setConfig(data.config);
+        if (identitySnapshot) {
+          setConfig({
+            ...data.config,
+            ...identitySnapshot,
+          });
+          pendingIdentityMergeRef.current = null;
+        } else {
+          setConfig(data.config);
+        }
         const init = nonNegativeTons(data.initial_storage);
         setInitialStorage(init);
         setDays(recomputeStorageForDays(data.days, init));
@@ -64,21 +117,24 @@ function App() {
         setYearlyProductionTotal(nonNegativeTons(data.config.yearly_carry_total ?? 0));
         calculateTotal();
       } else {
+        pendingIdentityMergeRef.current = null;
         setDays([]);
         // Try to load previous month's final storage state
-        let prevMonth = config.month - 1;
-        let prevYear = config.year;
+        let prevMonth = month - 1;
+        let prevYear = year;
         if (prevMonth === 0) {
           prevMonth = 12;
           prevYear -= 1;
         }
-        
+
         try {
           const prevData = await invoke<MonthData | null>("get_month_data", {
             year: prevYear,
             month: prevMonth,
           });
-          
+
+          if (myId !== loadRequestId.current) return;
+
           if (prevData && prevData.days.length > 0) {
             const lastDay = prevData.days[prevData.days.length - 1];
             setInitialStorage(nonNegativeTons(lastDay.storage_state));
@@ -92,8 +148,11 @@ function App() {
     } catch (error) {
       console.error("Failed to load month data:", error);
       setError(`Greška pri učitavanju: ${error}`);
+      pendingIdentityMergeRef.current = null;
     } finally {
-      setLoading(false);
+      if (myId === loadRequestId.current) {
+        setLoading(false);
+      }
     }
   };
 
@@ -308,7 +367,7 @@ function App() {
 
       if (filePath) {
         await invoke("export_year_to_excel", {
-          months: months,
+          months: months.map((m) => monthDataForExport(m, exportHeaderForExcel())),
           outputPath: filePath,
         });
         console.log("Excel fajl za celu godinu je uspešno kreiran!");
@@ -359,8 +418,19 @@ function App() {
 
   const handleConfigChange = (newConfig: Partial<WasteConfig>) => {
     const next = { ...config, ...newConfig };
+    if (newConfig.year !== undefined && newConfig.year !== config.year) {
+      pendingIdentityMergeRef.current = {
+        index_number: next.index_number,
+        waste_name: next.waste_name,
+        waste_description: next.waste_description,
+        record_keeper: next.record_keeper,
+      };
+    }
     if (newConfig.year !== undefined || newConfig.month !== undefined) {
-      next.id = `${next.year}_${String(next.month).padStart(2, "0")}`;
+      // Ako je izabran šablon iz liste, ne prepisuj id sa YYYY_MM — inače <select> nema opciju i „gubi“ izbor.
+      if (!selectedTemplateId) {
+        next.id = `${next.year}_${String(next.month).padStart(2, "0")}`;
+      }
     }
     setConfig(next);
   };
@@ -457,7 +527,7 @@ function App() {
       });
       
       await invoke("export_to_excel", {
-        data: monthData,
+        data: monthDataForExport(monthData, exportHeaderForExcel()),
         outputPath: filePath,
       });
       
@@ -476,7 +546,7 @@ function App() {
         });
         if (monthDataFallback) {
           await invoke("export_to_excel", {
-            data: monthDataFallback,
+            data: monthDataForExport(monthDataFallback, exportHeaderForExcel()),
             outputPath: fallbackPath,
           });
           console.log(`Excel fajl je sačuvan u Downloads folderu!`);
@@ -491,51 +561,6 @@ function App() {
     }
   };
 
-  if (loading) {
-    return (
-      <div style={{ 
-        padding: "40px", 
-        textAlign: "center", 
-        backgroundColor: theme.bg,
-        minHeight: "100vh",
-        color: theme.text,
-      }}>
-        <Loader2 size={32} style={{ margin: "0 auto 10px", animation: "spin 1s linear infinite" }} />
-        <p style={{ fontSize: "16px" }}>Učitavanje...</p>
-      </div>
-    );
-  }
-
-  if (error) {
-    return (
-      <div style={{ 
-        padding: "40px", 
-        textAlign: "center",
-        backgroundColor: theme.bg,
-        minHeight: "100vh",
-        color: theme.text,
-      }}>
-        <AlertTriangle size={32} style={{ margin: "0 auto 10px", color: "#dc2626" }} />
-        <p style={{ color: "#dc2626", marginBottom: "20px", fontSize: "16px" }}>{error}</p>
-        <button 
-          onClick={() => loadMonthData()}
-          style={{
-            padding: "12px 24px",
-            backgroundColor: theme.buttonPrimary,
-            color: "#fff",
-            border: "none",
-            borderRadius: "8px",
-            cursor: "pointer",
-            fontSize: "14px",
-            fontWeight: "600",
-          }}
-        >
-          Pokušaj ponovo
-        </button>
-      </div>
-    );
-  }
-
   return (
     <div style={{ 
       padding: "20px", 
@@ -546,6 +571,48 @@ function App() {
       color: theme.text,
       transition: "background-color 0.3s, color 0.3s"
     }}>
+      {error && (
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+            gap: "16px",
+            flexWrap: "wrap",
+            padding: "14px 18px",
+            marginBottom: "20px",
+            backgroundColor: darkMode ? "#3f1d1d" : "#fee2e2",
+            color: darkMode ? "#fecaca" : "#991b1b",
+            borderRadius: "10px",
+            border: `1px solid ${darkMode ? "#7f1d1d" : "#fecaca"}`,
+          }}
+        >
+          <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
+            <AlertTriangle size={22} style={{ flexShrink: 0 }} />
+            <span style={{ fontSize: "14px" }}>{error}</span>
+          </div>
+          <button
+            type="button"
+            onClick={() => {
+              setError(null);
+              loadMonthData().catch(console.error);
+            }}
+            style={{
+              padding: "10px 18px",
+              backgroundColor: theme.buttonPrimary,
+              color: "#fff",
+              border: "none",
+              borderRadius: "8px",
+              cursor: "pointer",
+              fontSize: "14px",
+              fontWeight: "600",
+            }}
+          >
+            Pokušaj ponovo
+          </button>
+        </div>
+      )}
+
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "30px" }}>
         <h1 style={{ margin: 0, color: theme.text, fontSize: "28px", fontWeight: "600" }}>
           Dnevna evidencija otpada
@@ -585,12 +652,26 @@ function App() {
       
       <ConfigManager
         currentConfig={config}
+        selectedTemplateId={selectedTemplateId}
+        exportHeaderDraftRef={exportHeaderDraftRef}
         onConfigSelect={(selectedConfig) => {
-          setConfig(selectedConfig);
+          pendingIdentityMergeRef.current = null;
+          setSelectedTemplateId(selectedConfig.id);
+          setConfig((prev) => ({
+            ...selectedConfig,
+            year: prev.year,
+            month: prev.month,
+            id: selectedConfig.id,
+          }));
           setInitialStorage(0.0);
           setYearStartStorage(nonNegativeTons(selectedConfig.year_start_storage ?? 0));
           setDecemberClosingStorage(nonNegativeTons(selectedConfig.december_closing_storage ?? 0));
           setYearlyProductionTotal(nonNegativeTons(selectedConfig.yearly_carry_total ?? 0));
+        }}
+        onConfigDeleted={(deletedId) => {
+          if (selectedTemplateId === deletedId) {
+            setSelectedTemplateId(null);
+          }
         }}
         darkMode={darkMode}
       />
@@ -616,13 +697,42 @@ function App() {
         onMonthChange={(m) => handleConfigChange({ month: m })}
         darkMode={darkMode}
       />
-      
-      <WasteTable
-        days={days}
-        totalProduced={totalProduced}
-        onDayChange={handleDayChange}
-        darkMode={darkMode}
-      />
+
+      <div style={{ position: "relative", marginBottom: "8px" }}>
+        {loading && (
+          <div
+            style={{
+              position: "absolute",
+              inset: 0,
+              zIndex: 5,
+              display: "flex",
+              flexDirection: "column",
+              alignItems: "center",
+              justifyContent: "center",
+              gap: "12px",
+              backgroundColor: darkMode ? "rgba(13, 17, 23, 0.75)" : "rgba(255, 255, 255, 0.85)",
+              borderRadius: "12px",
+              minHeight: "120px",
+            }}
+            aria-busy="true"
+            aria-label="Učitavanje podataka za mesec"
+          >
+            <Loader2
+              size={32}
+              style={{ animation: "spin 1s linear infinite", color: theme.buttonPrimary }}
+            />
+            <span style={{ fontSize: "14px", color: theme.text, fontWeight: 500 }}>
+              Učitavanje meseca…
+            </span>
+          </div>
+        )}
+        <WasteTable
+          days={days}
+          totalProduced={totalProduced}
+          onDayChange={handleDayChange}
+          darkMode={darkMode}
+        />
+      </div>
       
       <div style={{ marginTop: "40px", display: "flex", justifyContent: "center", gap: "20px", flexWrap: "wrap" }}>
         <button

@@ -154,12 +154,21 @@ fn distribute_year_delta_micros(year: i32, n: usize, delta_micro: i64) -> Result
 
     let min_floor = MIN_MICRO * n as i64;
     if delta_micro < min_floor {
+        // Ne gurati ostatak na prve radne dane u godini (to je praktično samo januar).
+        // Ravnomerno „razvuci“ dodatak kroz celu godinu (isti zbir, meseci približno podjednako).
         let mut micros = vec![0i64; n];
         let base = delta_micro / n as i64;
         let rem = (delta_micro % n as i64) as usize;
         for i in 0..n {
-            micros[i] = base + if i < rem { 1 } else { 0 };
+            micros[i] = base;
         }
+        if rem > 0 {
+            for k in 0..rem {
+                let idx = (k * n) / rem;
+                micros[idx] += 1;
+            }
+        }
+        debug_assert_eq!(micros.iter().sum::<i64>(), delta_micro);
         return Ok(micros);
     }
 
@@ -359,6 +368,24 @@ pub fn load_configs() -> Result<Vec<WasteConfig>, String> {
     }
 
     Ok(configs)
+}
+
+#[tauri::command]
+pub fn delete_config(config_id: String) -> Result<(), String> {
+    if config_id.is_empty()
+        || config_id.contains('/')
+        || config_id.contains('\\')
+        || config_id.contains("..")
+    {
+        return Err("Nevažeći ID konfiguracije.".to_string());
+    }
+    let config_dir = get_config_dir()?;
+    let file_path = config_dir.join(format!("{}.json", config_id));
+    if !file_path.exists() {
+        return Err("Konfiguracija nije pronađena.".to_string());
+    }
+    fs::remove_file(&file_path).map_err(|e| format!("Brisanje konfiguracije: {}", e))?;
+    Ok(())
 }
 
 #[tauri::command]

@@ -17,6 +17,7 @@ fn main() {
             commands::import_from_excel,
             commands::save_config,
             commands::load_configs,
+            commands::delete_config,
             commands::get_month_data,
             commands::save_month_data,
             commands::generate_produced_column,
